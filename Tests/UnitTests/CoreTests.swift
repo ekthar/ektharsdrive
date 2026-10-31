@@ -96,6 +96,10 @@ import Testing
             #expect(d.contains("File System Extensions"))
         } else { Issue.record("expected macFUSE extension error") }
         if case .dependencyMissing(.macFUSE, _) = ErrorClassifier.classify(output: ["fuse: failed to exec mount program: Operation not permitted"]) {} else { Issue.record("expected macFUSE helper error") }
+        // Real line from the app's google.log on this Mac:
+        let real = #"{"level":"critical","msg":"Fatal error: failed to mount FUSE fs: failed to retrieve mount path information: stat /Volumes/Google Drive: no such file or directory"}"#
+        let e = ErrorClassifier.classify(output: [real], exitCode: 1)
+        if case .dependencyMissing(.macFUSE, _) = e { #expect(!e.isRetryable, "must not start a retry loop") } else { Issue.record("expected macFUSE error, got \(e)") }
     }
 
     @Test func oracleNFSArguments() throws {

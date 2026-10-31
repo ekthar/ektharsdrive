@@ -27,6 +27,9 @@ public enum ErrorClassifier {
         if lower.contains("file system extension not enabled") {
             return .dependencyMissing(.macFUSE, detail: "macFUSE is installed but its file system extension is turned off. Turn on macFUSE in System Settings > General > Login Items & Extensions > File System Extensions, or switch to the Built-in NFS engine.")
         }
+        if lower.contains("failed to retrieve mount path information") || lower.contains("mount stopped before calling init") {
+            return .dependencyMissing(.macFUSE, detail: "macFUSE is installed but could not create the volume. Turn on macFUSE in System Settings > General > Login Items & Extensions > File System Extensions, or use the Built-in NFS engine.")
+        }
         if lower.contains("failed to exec mount program") {
             return .dependencyMissing(.macFUSE, detail: "macOS did not allow the macFUSE mount helper to run. Approve macFUSE in System Settings > Privacy & Security, or switch to the Built-in NFS engine.")
         }

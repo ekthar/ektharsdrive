@@ -49,6 +49,9 @@ public final class DriveManager {
     @ObservationIgnored private var diskMeasure: [String: (bytes: Int64, at: Date)] = [:]
     @ObservationIgnored private var lastLoggedError: [String: (String, Date)] = [:]
     @ObservationIgnored private var started = false
+    @ObservationIgnored private var mountingNow: Set<String> = []
+    /// Set once macFUSE fails to mount in Automatic mode; later mounts this session go straight to NFS.
+    @ObservationIgnored private var macFUSEUnusable = false
 
     public init(paths: AppPaths, secrets: SecretStore, database: AppDatabase, notifier: Notifier = NullNotifier()) {
         self.paths = paths
@@ -222,7 +225,11 @@ public final class DriveManager {
 
     private func performMount(_ d: DriveConfiguration) async {
         let id = d.id
-        guard desiredMounted.contains(id) else { return }
+        guard desiredMounted.contains(id), !mountingNow.contains(id) else { return }
+        // While a mount attempt is in flight, its own error handling owns retries; the process-exit
+        // handler must not schedule a second retry chain.
+        mountingNow.insert(id)
+        defer { mountingNow.remove(id) }
         update(id) { $0.phase = .mounting; $0.lastError = nil }
         do {
             guard d.enabled else { throw DriveError.invalidConfiguration("\(d.name) is disabled in settings.") }
@@ -230,7 +237,7 @@ public final class DriveManager {
             guard let deps = dependencies, let rclone = rcloneService else {
                 throw DriveError.dependencyMissing(.rclone, detail: "Install rclone from Settings > Advanced.")
             }
-            let engine = try deps.resolve(settings.mountEngine)
+            let resolved = try deps.resolve(settings.mountEngine)
             guard await rclone.remoteExists(d.remoteName) else { throw DriveError.notConfigured }
             if let warning = cacheManager.diskWarning(minFreeBytes: settings.globals.minFreeSpaceBytes), warning.level == .critical {
                 throw DriveError.localDiskFull(freeBytes: warning.freeBytes)
@@ -246,11 +253,21 @@ public final class DriveManager {
                 }
                 extra = try await oracle()?.runtimeEnvironment() ?? [:]
             }
-            let mountPath = MountPathResolver.path(for: d, engine: engine)
+            var engine = (settings.mountEngine == .automatic && macFUSEUnusable && deps.nfsUsable) ? .nfs : resolved
             let manager = MountManager(paths: paths, supervisor: supervisor, rcloneURL: rclone.binary.url)
-            let request = MountRequest(drive: d, engine: engine, mountPath: mountPath,
-                                       environment: try rclone.environment(extra: extra), globals: settings.globals)
-            let pid = try await manager.mount(request)
+            let env = try rclone.environment(extra: extra)
+            var mountPath = MountPathResolver.path(for: d, engine: engine)
+            let pid: Int32
+            do {
+                pid = try await manager.mount(MountRequest(drive: d, engine: engine, mountPath: mountPath, environment: env, globals: settings.globals))
+            } catch DriveError.dependencyMissing(.macFUSE, let detail) where engine == .macFUSE && settings.mountEngine == .automatic && deps.nfsUsable {
+                // macFUSE is installed but cannot mount (e.g. its extension is switched off). Use the built-in engine.
+                macFUSEUnusable = true
+                log(id, "mount", "macFUSE could not mount (\(detail)) Using the built-in NFS engine instead.", .warning)
+                engine = .nfs
+                mountPath = MountPathResolver.path(for: d, engine: engine)
+                pid = try await manager.mount(MountRequest(drive: d, engine: engine, mountPath: mountPath, environment: env, globals: settings.globals))
+            }
             guard desiredMounted.contains(id) else {
                 // User asked to unmount while we were mounting.
                 try? await manager.unmount(driveID: id, mountPath: mountPath, waitForUploads: true)
@@ -403,6 +420,9 @@ public final class DriveManager {
             guard let d = drive(id) else { return }
             if stopping.contains(id) || !desiredMounted.contains(id) {
                 return // expected exit during unmount
+            }
+            if mountingNow.contains(id) || state(id).phase != .mounted {
+                return // the mount attempt (or a pending retry) already handles this failure
             }
             finishStopped(id)
             let error: DriveError = {
