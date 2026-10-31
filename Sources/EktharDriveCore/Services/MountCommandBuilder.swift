@@ -32,15 +32,13 @@ public struct MountGlobals: Sendable, Equatable {
     public static let allowedLogLevels = ["DEBUG", "INFO", "NOTICE", "ERROR"]
 }
 
-/// Default mount locations. macFUSE creates mount points under /Volumes itself; the NFS engine
-/// cannot (only root can write /Volumes), so NFS volumes live in ~/Volumes.
+/// Default mount locations: ~/Volumes/<name> for every engine. Only root can create folders in
+/// /Volumes, and macFUSE 5 no longer creates them for rclone ("stat /Volumes/<name>: no such file or
+/// directory"). The volume still shows in the Finder sidebar under Locations by its --volname.
 public enum MountPathResolver {
     public static func path(for drive: DriveConfiguration, engine: MountEngine, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
         if let explicit = drive.mountPath, !explicit.isEmpty { return explicit }
-        switch engine {
-        case .macFUSE, .automatic: return "/Volumes/\(drive.name)"
-        case .nfs: return (home.path as NSString).appendingPathComponent("Volumes/\(drive.name)")
-        }
+        return (home.path as NSString).appendingPathComponent("Volumes/\(drive.name)")
     }
 }
 

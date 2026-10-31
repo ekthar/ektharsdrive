@@ -151,7 +151,7 @@ import Testing
 
     @Test func defaultMountPaths() {
         let home = URL(fileURLWithPath: "/Users/test")
-        #expect(MountPathResolver.path(for: .googleDefault, engine: .macFUSE, home: home) == "/Volumes/Google Drive")
+        #expect(MountPathResolver.path(for: .googleDefault, engine: .macFUSE, home: home) == "/Users/test/Volumes/Google Drive")
         #expect(MountPathResolver.path(for: .oracleDefault, engine: .nfs, home: home) == "/Users/test/Volumes/Oracle Drive")
         var d = DriveConfiguration.oracleDefault
         d.mountPath = "/Users/test/Mounts/O"
