@@ -16,6 +16,14 @@ public final class AppModel {
     /// Current main-window width, for layout decisions that must not depend on the content they change.
     var windowWidth: CGFloat = 0
     @ObservationIgnored private var browsers: [String: FileBrowserModel] = [:]
+    @ObservationIgnored private var finders: [String: FindModel] = [:]
+
+    func finder(for driveID: String) -> FindModel {
+        if let f = finders[driveID] { return f }
+        let f = FindModel(driveID: driveID)
+        finders[driveID] = f
+        return f
+    }
 
     /// One browser per drive so location and history survive switching drives.
     func browser(for driveID: String) -> FileBrowserModel {
@@ -80,6 +88,7 @@ public enum SidebarItem: Hashable {
     case dashboard
     case drive(String)
     case collection(String, CloudActions.Collection)
+    case find(String, FindMode)
     case transfers, cache, activity
 }
 

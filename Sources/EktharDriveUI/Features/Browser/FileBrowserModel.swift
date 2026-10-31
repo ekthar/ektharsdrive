@@ -99,7 +99,13 @@ final class FileBrowserModel {
         items = []
         selection = []
         if newRoot != nil { await reload() }
+        if newRoot != nil, let (url, isFolder) = pendingReveal {
+            pendingReveal = nil
+            reveal(url, isFolder: isFolder)
+        }
     }
+
+    @ObservationIgnored private var pendingReveal: (URL, Bool)?
 
     func reload() async {
         guard let dir = current else { return }
@@ -127,6 +133,15 @@ final class FileBrowserModel {
         selection = []
         search = ""
         Task { await reload() }
+    }
+
+    /// Opens a folder, or the folder holding a file with the file selected (from Find).
+    func reveal(_ url: URL, isFolder: Bool) {
+        // The browser attaches to the volume when it first appears; finish the reveal then.
+        guard root != nil else { pendingReveal = (url, isFolder); return }
+        let folder = isFolder ? url : url.deletingLastPathComponent()
+        if folder.standardizedFileURL != current?.standardizedFileURL { navigate(to: folder) }
+        if !isFolder { selection = [url] }
     }
 
     func goBack() {

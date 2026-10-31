@@ -53,6 +53,22 @@ struct DriveBrowserView: View {
             .task(id: "\(rt.phase.isActive)|\(rt.mountPath ?? "")") {
                 await browser.attach(mountPath: rt.phase.isActive ? rt.mountPath : nil)
             }
+            // Speed: a file that stays selected for a moment has its start read ahead, so Space or
+            // double-click opens from disk.
+            .task(id: browser.singleSelected?.url) {
+                guard drives.settings.prefetchSelection, let item = browser.singleSelected, !item.isDirectory else { return }
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled else { return }
+                drives.warmStart(item.url)
+            }
+            // Speed: load the listings of the folders shown here, so opening any of them is instant.
+            .task(id: "\(browser.current?.path ?? "")|\(browser.items.count)") {
+                guard let root = browser.root, !browser.items.isEmpty else { return }
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                let dirs = browser.items.filter(\.isDirectory).compactMap { CloudActions.remotePath(of: $0.url, mountPath: root.path) }
+                drives.prefetchListings(d.id, relativeDirs: dirs)
+            }
             .alert("Rename", isPresented: Binding(get: { browser.renameTarget != nil }, set: { if !$0 { browser.renameTarget = nil } })) {
                 TextField("Name", text: $browser.renameText)
                 Button("Rename") { if let item = browser.renameTarget { let name = browser.renameText; Task { await browser.rename(item, to: name) } } }
@@ -178,6 +194,7 @@ struct FileActions {
 // MARK: - Icon grid
 
 struct FileGridView: View {
+    @Environment(DriveManager.self) private var drives
     @Bindable var browser: FileBrowserModel
     let actions: FileActions
 
@@ -189,7 +206,7 @@ struct FileGridView: View {
                 }
                 ForEach(Array(browser.visibleItems.enumerated()), id: \.element.id) { i, item in
                     // No entrance or selection animation: folders open and selection changes hundreds of times a day.
-                    FileTile(item: item, selected: browser.selection.contains(item.url))
+                    FileTile(item: item, selected: browser.selection.contains(item.url), previews: drives.settings.showPreviews)
                         .onTapGesture(count: 2) { browser.open(item) }
                         .onTapGesture { browser.select(item, extend: NSEvent.modifierFlags.contains(.command)) }
                         .contextMenu { FileContextMenu(item: item, browser: browser, actions: actions) }
@@ -213,17 +230,15 @@ struct FileGridView: View {
 struct FileTile: View {
     let item: FileItem
     let selected: Bool
+    var previews = true
     @State private var hovering = false
 
     var body: some View {
         VStack(spacing: 8) {
-            Image(decorative: FileIcons.bitmap(for: item), scale: 2)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 64, height: 64)
+            FileThumbnail(item: item, enabled: previews)
                 .clipped()
                 .shadow(color: .black.opacity(hovering ? 0.14 : 0), radius: 8, y: 5)
-                
+
             VStack(spacing: 2) {
                 Text(item.name)
                     .font(.system(size: 12, weight: selected ? .semibold : .medium))
@@ -320,6 +335,17 @@ struct FileContextMenu: View {
         Divider()
         Button("Rename…") { actions.rename(item) }.disabled(targets.count > 1)
         Button(targets.count > 1 ? "Download \(targets.count) Items…" : "Download a Copy…") { actions.download(targets) }
+        if let root = browser.root, let rel = CloudActions.remotePath(of: item.url, mountPath: root.path) {
+            if let pin = drives.pin(for: browser.driveID, path: rel) {
+                Button("Stop Keeping Offline") { drives.removeOffline(pin) }
+            } else {
+                Button("Keep Offline") {
+                    drives.keepOffline(browser.driveID, path: rel)
+                    browser.flash("Keeping “\(item.name)” on this Mac. See Cache for progress.")
+                }
+                .disabled(targets.count > 1)
+            }
+        }
         if drives.drive(browser.driveID)?.provider == .googleDrive {
             Button("Copy Share Link") { Task { await browser.copyShareLink(item, drives: drives) } }.disabled(targets.count > 1)
         }

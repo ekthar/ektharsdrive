@@ -35,6 +35,7 @@ public struct RootView: View {
         case .dashboard: DashboardView()
         case .drive(let id): DriveBrowserView(browser: model.browser(for: id)).id(id)
         case .collection(let id, let kind): CollectionView(driveID: id, kind: kind).id("\(id)-\(kind.rawValue)")
+        case .find(let id, let mode): FindView(driveID: id, mode: mode).id(model.selection)
         case .transfers: TransfersView()
         case .cache: CacheView()
         case .activity: ActivityView()
@@ -56,6 +57,23 @@ struct Sidebar: View {
             Section("Locations") {
                 ForEach(drives.drives) { d in
                     DriveSidebarRow(drive: d).tag(SidebarItem.drive(d.id))
+                }
+            }
+            if let g = drives.googleDrive, drives.state(g.id).connection.isConfigured {
+                Section("Find") {
+                    Label("Search", systemImage: "magnifyingglass").tag(SidebarItem.find(g.id, .search))
+                    Label("Recents", systemImage: "clock").tag(SidebarItem.find(g.id, .recents))
+                    ForEach(drives.smartFolders) { f in
+                        Label(f.name, systemImage: "folder.badge.gearshape").tag(SidebarItem.find(f.driveID, .smart(f.id)))
+                            .contextMenu {
+                                Button("Delete Smart Folder", role: .destructive) {
+                                    drives.deleteSmartFolder(f.id)
+                                    if model.selection == .find(f.driveID, .smart(f.id)) { model.selection = .find(g.id, .search) }
+                                }
+                            }
+                    }
+                    Label("Duplicates", systemImage: "square.on.square").tag(SidebarItem.find(g.id, .duplicates))
+                    Label("Space", systemImage: "chart.bar.xaxis").tag(SidebarItem.find(g.id, .space))
                 }
             }
             if let g = drives.googleDrive, drives.state(g.id).connection.isConfigured {

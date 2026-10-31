@@ -20,6 +20,10 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var googleClientID: String?
     /// Upload/download cap in MB/s for all drives; nil or 0 = unlimited.
     public var bandwidthLimitMBps: Double?
+    /// Real previews for images, PDFs and videos in icon view. Reads part of each shown file.
+    public var showPreviews = true
+    /// Read the start of a selected file in the background so it opens instantly.
+    public var prefetchSelection = true
 
     public init() {}
 
@@ -40,6 +44,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
         setupCompleted = try c.decodeIfPresent(Bool.self, forKey: .setupCompleted) ?? d.setupCompleted
         googleClientID = try c.decodeIfPresent(String.self, forKey: .googleClientID)
         bandwidthLimitMBps = try c.decodeIfPresent(Double.self, forKey: .bandwidthLimitMBps)
+        showPreviews = try c.decodeIfPresent(Bool.self, forKey: .showPreviews) ?? d.showPreviews
+        prefetchSelection = try c.decodeIfPresent(Bool.self, forKey: .prefetchSelection) ?? d.prefetchSelection
     }
 }
 

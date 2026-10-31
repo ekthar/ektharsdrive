@@ -23,6 +23,16 @@ struct CacheView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Cache folder", value: drives.paths.cacheRoot.path).textSelection(.enabled)
             }
+            Section("Kept offline") {
+                if drives.offlinePins.isEmpty {
+                    Text("Right-click a folder or file and choose Keep Offline. It downloads in the background, stays in the cache, and is refreshed every 6 hours.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    ForEach(drives.offlinePins) { pin in OfflinePinRow(pin: pin) }
+                    Text("Offline items live in the drive's cache, so the cache limit must be larger than what you keep.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             ForEach(drives.drives) { d in
                 CacheSection(drive: d, message: $message, error: $error)
             }
@@ -80,5 +90,43 @@ private struct CacheSection: View {
                 } catch let e { error = .wrap(e) }
             }
         } message: { Text("Files waiting to upload are never removed. Nothing is deleted from the remote drive.") }
+    }
+}
+
+struct OfflinePinRow: View {
+    @Environment(DriveManager.self) private var drives
+    let pin: OfflinePin
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.down.circle.fill").foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(pin.name).font(.bodyStrong)
+                Text("\(drives.drive(pin.driveID)?.name ?? pin.driveID) · \(pin.path.isEmpty ? "/" : pin.path)")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                status
+            }
+            Spacer()
+            Button("Remove") { drives.removeOffline(pin) }.buttonStyle(.borderless)
+        }
+    }
+
+    @ViewBuilder private var status: some View {
+        switch drives.pinStatus[pin.id] ?? .waiting {
+        case .waiting:
+            Text(drives.state(pin.driveID).phase == .mounted ? "Waiting" : "Starts when the drive is mounted")
+                .font(.caption).foregroundStyle(.secondary)
+        case .downloading(let done, let total):
+            ProgressView(value: total > 0 ? Double(done) / Double(total) : 0) {
+                Text(total > 0 ? "\(ByteFormat.string(done)) of \(ByteFormat.string(total))" : "Counting files…")
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: 260)
+        case .ready(let files, let bytes, let at):
+            Label("\(files) file\(files == 1 ? "" : "s"), \(ByteFormat.string(bytes)) on this Mac · \(at.relative)", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(Theme.success)
+        case .failed(let message):
+            Text(message).font(.caption).foregroundStyle(Theme.danger).fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

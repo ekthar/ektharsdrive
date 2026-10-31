@@ -82,6 +82,12 @@ struct GeneralSettingsView: View {
                     ForEach([1.0, 2, 5, 10, 25, 50], id: \.self) { Text("\(Int($0)) MB/s").tag($0) }
                 }
                 Text("Applies to uploads and downloads on every drive right away.").font(.caption).foregroundStyle(.secondary)
+                Toggle("Show previews of images, PDFs and videos", isOn: Binding(
+                    get: { drives.settings.showPreviews }, set: { v in model.updateSettings { $0.showPreviews = v } }))
+                Toggle("Read ahead the selected file", isOn: Binding(
+                    get: { drives.settings.prefetchSelection }, set: { v in model.updateSettings { $0.prefetchSelection = v } }))
+                Text("Previews read part of each file shown in icon view. Read-ahead loads the first 2 MB of a selected file so it opens at once.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             ForEach(drives.drives) { d in DriveSettingsSection(drive: d) }
         }

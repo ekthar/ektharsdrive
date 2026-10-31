@@ -25,6 +25,15 @@ public final class DriveManager {
     public private(set) var sftpConnection: SFTPConnection?
     public private(set) var startupError: String?
     public private(set) var lastCacheClear: [String: Date] = [:]
+    /// Folders kept on this Mac, and how far each one is.
+    public private(set) var offlinePins: [OfflinePin] = []
+    public private(set) var pinStatus: [String: PinStatus] = [:]
+    @ObservationIgnored private var pinTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var lastPinSync: [String: Date] = [:]
+    static let pinsKey = "offline.pins"
+    /// Saved searches shown in the sidebar.
+    public private(set) var smartFolders: [SmartFolder] = []
+    static let smartFoldersKey = "smart.folders"
 
     // MARK: Dependencies
     public let paths: AppPaths
@@ -134,6 +143,9 @@ public final class DriveManager {
         }
         loadSettings()
         loadDrives()
+        offlinePins = Prefetcher.decodePins(database.setting(Self.pinsKey))
+        for p in offlinePins { pinStatus[p.id] = .waiting }
+        smartFolders = SmartFolder.decode(database.setting(Self.smartFoldersKey))
         try? database.markStaleTransfersInterrupted()
         transferHistory = (try? database.recentTransfers()) ?? []
         recentActivity = (try? database.activity(limit: 300)) ?? []
@@ -340,6 +352,7 @@ public final class DriveManager {
             Task { await self.refreshUsage(id) }
             if let limit = settings.bandwidthLimitMBps, limit > 0 { try? await cloudActions(id)?.setBandwidth(megabytesPerSecond: limit) }
             Task.detached(priority: .utility) { [paths] in await Self.prewarm(socket: paths.rcSocket(for: id).path, mountPath: mountPath) }
+            lastPinSync[id] = nil // the poll loop starts offline folders shortly after mounting
         } catch let error as DriveError {
             mountFailed(d, error)
         } catch {
@@ -384,6 +397,8 @@ public final class DriveManager {
         guard let d = drive(id) else { return }
         retryTasks[id]?.cancel()
         retryTasks[id] = nil
+        pinTasks[id]?.cancel()
+        pinTasks[id] = nil
         let rt = state(id)
         let processRunning = await supervisor.isRunning(id)
         guard rt.phase.isActive || rt.phase == .mounting || processRunning else {
@@ -553,6 +568,12 @@ public final class DriveManager {
                 Task { await self.unmount(d.id, waitForUploads: true) }
             }
         }
+        // Re-read offline folders every 6 hours: picks up new files and keeps rclone from aging them out.
+        for d in drives where state(d.id).phase == .mounted && pinTasks[d.id] == nil
+            && offlinePins.contains(where: { $0.driveID == d.id })
+            && Date().timeIntervalSince(lastPinSync[d.id] ?? .distantPast) > 6 * 3600 {
+            syncPins(d.id)
+        }
         var busy = false
         for d in drives where state(d.id).phase.isActive {
             let rc = RcClient(socketPath: paths.rcSocket(for: d.id).path, timeoutSeconds: 15)
@@ -703,6 +724,110 @@ public final class DriveManager {
     public func cloudActions(_ id: String) -> CloudActions? {
         guard let d = drive(id), state(id).phase.isActive else { return nil }
         return CloudActions(rc: RcClient(socketPath: paths.rcSocket(for: id).path, timeoutSeconds: 60), drive: d)
+    }
+
+    /// Drive-wide search through the running rclone. Nil when the drive is not mounted.
+    public func search(_ id: String) -> DriveSearch? {
+        guard let d = drive(id), state(id).phase.isActive else { return nil }
+        return DriveSearch(socketPath: paths.rcSocket(for: id).path, drive: d)
+    }
+
+    public func saveSmartFolder(_ f: SmartFolder) {
+        if let i = smartFolders.firstIndex(where: { $0.id == f.id }) { smartFolders[i] = f } else { smartFolders.append(f) }
+        try? database.setSetting(Self.smartFoldersKey, SmartFolder.encode(smartFolders))
+    }
+
+    public func deleteSmartFolder(_ id: String) {
+        smartFolders.removeAll { $0.id == id }
+        try? database.setSetting(Self.smartFoldersKey, SmartFolder.encode(smartFolders))
+    }
+
+    // MARK: Offline folders and prefetch
+
+    public func pin(for driveID: String, path: String) -> OfflinePin? {
+        let p = OfflinePin(driveID: driveID, path: path)
+        return offlinePins.first { $0.id == p.id }
+    }
+
+    /// Keeps a folder or file on this Mac. It downloads in the background and is re-read every 6 hours.
+    public func keepOffline(_ driveID: String, path: String) {
+        let p = OfflinePin(driveID: driveID, path: path)
+        guard !offlinePins.contains(p) else { return }
+        offlinePins.append(p)
+        pinStatus[p.id] = .waiting
+        savePins()
+        log(driveID, "offline", "Keeping “\(p.name)” on this Mac.", .info)
+        syncPins(driveID, restart: true)
+    }
+
+    /// Stops keeping it. Already downloaded data stays in the cache until rclone ages it out.
+    public func removeOffline(_ pin: OfflinePin) {
+        offlinePins.removeAll { $0 == pin }
+        pinStatus[pin.id] = nil
+        savePins()
+        if pinTasks[pin.driveID] != nil { syncPins(pin.driveID, restart: true) }
+    }
+
+    private func savePins() { try? database.setSetting(Self.pinsKey, Prefetcher.encodePins(offlinePins)) }
+
+    /// Downloads this drive's offline folders one after another, off the main thread.
+    public func syncPins(_ driveID: String, restart: Bool = false) {
+        if restart { pinTasks[driveID]?.cancel(); pinTasks[driveID] = nil }
+        guard pinTasks[driveID] == nil, let d = drive(driveID), state(driveID).phase == .mounted,
+              let mount = state(driveID).mountPath else { return }
+        let pins = offlinePins.filter { $0.driveID == driveID }
+        guard !pins.isEmpty else { return }
+        lastPinSync[driveID] = Date()
+        let budget = Int64(Double(d.cache.maxSizeBytes) * 0.9)
+        pinTasks[driveID] = Task { [weak self] in
+            var used: Int64 = 0
+            for pin in pins {
+                guard !Task.isCancelled else { break }
+                let url = URL(fileURLWithPath: mount).appendingPathComponent(pin.path)
+                self?.pinStatus[pin.id] = .downloading(doneBytes: 0, totalBytes: 0)
+                let reporter = ProgressThrottle { done, total in
+                    Task { @MainActor in
+                        if case .downloading = self?.pinStatus[pin.id] { self?.pinStatus[pin.id] = .downloading(doneBytes: done, totalBytes: total) }
+                    }
+                }
+                let left = budget - used
+                let stop = StopFlag()
+                let result: Result<(files: Int, bytes: Int64), DriveError> = await withTaskCancellationHandler {
+                    await Task.detached(priority: .utility) {
+                        Result { () throws(DriveError) in
+                            try Prefetcher.download(url, budgetBytes: left, progress: reporter.report, cancelled: stop.isSet)
+                        }
+                    }.value
+                } onCancel: { stop.set() }
+                guard !Task.isCancelled, let self else { break }
+                switch result {
+                case .success(let r):
+                    used += r.bytes
+                    pinStatus[pin.id] = .ready(files: r.files, bytes: r.bytes, at: Date())
+                case .failure(let e):
+                    pinStatus[pin.id] = .failed(e.detail)
+                    log(driveID, "offline", "Could not keep “\(pin.name)” offline: \(e.detail)", .warning)
+                }
+            }
+            self?.pinTasks[driveID] = nil
+        }
+    }
+
+    /// Reads the start of a file in the background so opening it does not wait for the network.
+    public func warmStart(_ url: URL) {
+        Task.detached(priority: .utility) { Prefetcher.warmStart(url) }
+    }
+
+    /// Loads the listings of the given folders into rclone's cache, so opening them is instant.
+    public func prefetchListings(_ id: String, relativeDirs: [String]) {
+        guard state(id).phase.isActive, !relativeDirs.isEmpty else { return }
+        let socket = paths.rcSocket(for: id).path
+        Task.detached(priority: .utility) {
+            let rc = RcClient(socketPath: socket, timeoutSeconds: 30)
+            for dir in relativeDirs.prefix(12) {
+                _ = try? await rc.call("vfs/refresh", params: ["dir": dir, "recursive": "false"])
+            }
+        }
     }
 
     /// Other drives a file can be copied to directly (configured in the same rclone.conf).
