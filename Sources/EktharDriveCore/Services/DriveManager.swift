@@ -50,6 +50,8 @@ public final class DriveManager {
     @ObservationIgnored private var lastLoggedError: [String: (String, Date)] = [:]
     @ObservationIgnored private var started = false
     @ObservationIgnored private var mountingNow: Set<String> = []
+    @ObservationIgnored private var pollFailures: [String: Int] = [:]
+    static let pollFailuresBeforeError = 3
     /// Set once macFUSE fails to mount in Automatic mode; later mounts this session go straight to NFS.
     @ObservationIgnored private var macFUSEUnusable = false
 
@@ -495,7 +497,7 @@ public final class DriveManager {
         }
         var busy = false
         for d in drives where state(d.id).phase.isActive {
-            let rc = RcClient(socketPath: paths.rcSocket(for: d.id).path, timeoutSeconds: 5)
+            let rc = RcClient(socketPath: paths.rcSocket(for: d.id).path, timeoutSeconds: 15)
             do {
                 var cache = try await cacheManager.liveStats(rc)
                 if diskMeasure[d.id].map({ Date().timeIntervalSince($0.at) > 30 }) ?? true {
@@ -519,16 +521,28 @@ public final class DriveManager {
                 if transferHistory.count > 500 { transferHistory.removeLast(transferHistory.count - 500) }
                 update(d.id) {
                     $0.cache = cache
-                    if case .rcUnavailable = $0.lastError { $0.lastError = nil }
+                    // A good answer clears any earlier "not answering" state.
+                    switch $0.lastError {
+                    case .rcUnavailable?, .timeout?: $0.lastError = nil
+                    default: break
+                    }
                     if cache.outOfSpace { $0.lastError = .cacheFull }
                 }
+                pollFailures[d.id] = 0
                 if !result.active.isEmpty || cache.pendingUploads > 0 { busy = true }
                 if lastUsageRefresh[d.id].map({ Date().timeIntervalSince($0) > 300 }) ?? true {
                     lastUsageRefresh[d.id] = Date()
                     if let about = try? await rc.about(fs: d.remoteSpec) { update(d.id) { $0.usage = about.usage } }
                 }
             } catch let e {
-                update(d.id) { $0.lastError = e }
+                // rclone can be briefly busy (a big first listing, opening a large file). One slow answer is
+                // not a problem; only report it after 3 misses in a row (about 45 s or more).
+                let misses = (pollFailures[d.id] ?? 0) + 1
+                pollFailures[d.id] = misses
+                if misses >= Self.pollFailuresBeforeError {
+                    update(d.id) { $0.lastError = .rcUnavailable("\(d.name) is not answering. Files may open slowly. Ekthar Drive keeps checking.") }
+                }
+                _ = e
             }
         }
         return busy
