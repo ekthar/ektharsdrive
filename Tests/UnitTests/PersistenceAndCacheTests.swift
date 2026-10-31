@@ -224,6 +224,30 @@ func makeTempDir(_ name: String = "t") throws -> URL {
         try store.delete(.oracleKeyPassphrase)
     }
 
+    @Test func bundledStoreUsesOneItemAndMigratesOldItems() throws {
+        let service = "com.ekthar.drive.tests.bundle.\(UUID().uuidString.prefix(6))"
+        let old = KeychainStore(service: service)
+        defer {
+            for k in SecretKey.allCases { try? old.delete(k) }
+            try? old.deleteRaw(account: "secrets-v1")
+        }
+        try old.set("legacy-pass", for: .rcloneConfigPassword)
+        try old.set("legacy-secret", for: .googleClientSecret)
+
+        let bundled = BundledKeychainStore(service: service)
+        #expect(try bundled.get(.rcloneConfigPassword) == "legacy-pass", "migrated")
+        #expect(try bundled.get(.googleClientSecret) == "legacy-secret")
+        #expect(try old.get(.rcloneConfigPassword) == nil, "old item removed after migration")
+        #expect(try old.getRaw(account: "secrets-v1") != nil, "one bundle item holds everything")
+
+        try bundled.set("new", for: .oracleKeyPassphrase)
+        try bundled.delete(.googleClientSecret)
+        let fresh = BundledKeychainStore(service: service)
+        #expect(try fresh.get(.oracleKeyPassphrase) == "new")
+        #expect(try fresh.get(.googleClientSecret) == nil)
+        #expect(try fresh.get(.rcloneConfigPassword) == "legacy-pass")
+    }
+
     @Test func randomPasswordsAreStrongAndUnique() {
         let a = KeychainStore.randomPassword(), b = KeychainStore.randomPassword()
         #expect(a != b && a.count >= 42)

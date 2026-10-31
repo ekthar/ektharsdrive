@@ -22,6 +22,12 @@ final class FileBrowserModel {
         didSet { UserDefaults.standard.set(viewMode.rawValue, forKey: "browser.viewMode") }
     }
     var showInspector = true
+    /// File shown in Quick Look (Space bar), or nil.
+    var quickLookURL: URL?
+    /// Shown in the bottom bar while a copy into or out of the drive runs.
+    private(set) var busyMessage: String?
+    /// Short confirmation ("Link copied"), shown briefly.
+    var toast: String?
     /// The user's own choice; automatic hiding on narrow windows never overrides it.
     private var userWantsInspector = true
     private var autoHidden = false
@@ -34,10 +40,11 @@ final class FileBrowserModel {
 
     /// Below this width the file area gets too cramped next to the info panel, and macOS starts
     /// collapsing the sidebar into an overlay. Hide the panel instead, and bring it back when there is room.
-    func fitInspector(detailWidth: CGFloat) {
-        guard detailWidth > 0 else { return }
-        if showInspector, detailWidth < Layout.hideInspectorBelow { autoHidden = true; showInspector = false }
-        else if !showInspector, autoHidden, userWantsInspector, detailWidth >= Layout.showInspectorAbove { autoHidden = false; showInspector = true }
+    func fitInspector(windowWidth: CGFloat) {
+        guard windowWidth > 100 else { return }
+        let roomy = windowWidth >= Layout.inspectorNeedsWindowWidth
+        if showInspector, !roomy { autoHidden = true; showInspector = false }
+        else if !showInspector, roomy, autoHidden, userWantsInspector { autoHidden = false; showInspector = true }
     }
     private var backStack: [URL] = []
     private var forwardStack: [URL] = []
@@ -174,7 +181,14 @@ final class FileBrowserModel {
             _ = await offMain { () throws(DriveError) in try FileBrowsing.move(local, into: target, root: root) }
         }
         if !external.isEmpty {
-            do { _ = try await FileBrowsing.copyIn(external, to: target, root: root); error = nil } catch let e { error = e }
+            let folders = external.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }.count
+            busyMessage = "Copying \(external.count) item\(external.count == 1 ? "" : "s")\(folders > 0 ? " (\(folders) folder\(folders == 1 ? "" : "s"))" : "")…"
+            defer { busyMessage = nil }
+            do {
+                let copied = try await FileBrowsing.copyIn(external, to: target, root: root)
+                error = nil
+                flash("Added \(copied.count) item\(copied.count == 1 ? "" : "s"). Uploading in the background.")
+            } catch let e { error = e }
         }
         await reload()
     }
@@ -189,6 +203,40 @@ final class FileBrowserModel {
         await receive(panel.urls)
     }
 
+    func flash(_ text: String) {
+        toast = text
+        Task { try? await Task.sleep(for: .seconds(2.6)); if toast == text { toast = nil } }
+    }
+
+    /// Space bar: preview the single selected file.
+    func toggleQuickLook() {
+        if quickLookURL != nil { quickLookURL = nil; return }
+        if let item = selectedItems.first, !item.isDirectory { quickLookURL = item.url }
+    }
+
+    func copyShareLink(_ item: FileItem, drives: DriveManager) async {
+        guard let root, let actions = drives.cloudActions(driveID),
+              let rel = CloudActions.remotePath(of: item.url, mountPath: root.path) else { return }
+        do {
+            let link = try await actions.publicLink(relativePath: rel)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(link.absoluteString, forType: .string)
+            flash("Share link copied")
+        } catch let e { error = e }
+    }
+
+    /// Copies straight from this drive to another one (e.g. Google to Oracle) without using this Mac's disk.
+    func copy(_ items: [FileItem], to target: DriveConfiguration, drives: DriveManager) async {
+        guard let root, let actions = drives.cloudActions(driveID) else { return }
+        do {
+            for item in items {
+                guard let rel = CloudActions.remotePath(of: item.url, mountPath: root.path) else { continue }
+                try await actions.copy(relativePath: rel, isDirectory: item.isDirectory, to: target)
+            }
+            flash("Copying \(items.count) item\(items.count == 1 ? "" : "s") to \(target.name). See Transfers.")
+        } catch let e { error = e }
+    }
+
     func download(_ urls: [URL]) async {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -198,6 +246,8 @@ final class FileBrowserModel {
         panel.message = "Choose where to save a copy."
         panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         guard panel.runModal() == .OK, let dest = panel.url else { return }
+        busyMessage = "Downloading \(urls.count) item\(urls.count == 1 ? "" : "s")…"
+        defer { busyMessage = nil }
         do {
             let out = try await FileBrowsing.copyOut(urls, to: dest)
             NSWorkspace.shared.activateFileViewerSelecting(out)

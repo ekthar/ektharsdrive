@@ -59,7 +59,7 @@ struct DriveInspector: View {
             Text(item.name).font(.headline).multilineTextAlignment(.center).frame(maxWidth: .infinity).textSelection(.enabled)
             VStack(spacing: 8) {
                 row("Kind", FileIcons.kind(for: item))
-                if !item.isDirectory { row("Size", ByteFormat.string(item.size)) }
+                if !item.isDirectory { row("Size", FileIcons.sizeLabel(for: item)) }
                 row("Modified", item.modified.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "--")
                 row("Where", item.url.deletingLastPathComponent().path)
             }

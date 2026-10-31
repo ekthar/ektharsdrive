@@ -19,6 +19,9 @@ public struct RootView: View {
                 .background(Theme.canvas)
                 .animation(Theme.spring, value: model.selection)
         }
+        .background(GeometryReader { g in
+            Color.clear.onChange(of: g.size.width, initial: true) { _, w in if abs(model.windowWidth - w) > 1 { model.windowWidth = w } }
+        })
         .sheet(isPresented: $model.showSetup) {
             SetupWizardView().environment(model).environment(drives)
         }
@@ -32,6 +35,7 @@ public struct RootView: View {
         switch model.selection ?? .dashboard {
         case .dashboard: DashboardView()
         case .drive(let id): DriveBrowserView(browser: model.browser(for: id)).id(id)
+        case .collection(let id, let kind): CollectionView(driveID: id, kind: kind).id("\(id)-\(kind.rawValue)")
         case .transfers: TransfersView()
         case .cache: CacheView()
         case .activity: ActivityView()
@@ -53,6 +57,12 @@ struct Sidebar: View {
             Section("Locations") {
                 ForEach(drives.drives) { d in
                     DriveSidebarRow(drive: d).tag(SidebarItem.drive(d.id))
+                }
+            }
+            if let g = drives.googleDrive, drives.state(g.id).connection.isConfigured {
+                Section("Google") {
+                    Label("Starred", systemImage: "star").tag(SidebarItem.collection(g.id, .starred))
+                    Label("Trash", systemImage: "trash").tag(SidebarItem.collection(g.id, .trash))
                 }
             }
             Section("Activity") {

@@ -18,6 +18,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var autoReconnect = true
     public var setupCompleted = false
     public var googleClientID: String?
+    /// Upload/download cap in MB/s for all drives; nil or 0 = unlimited.
+    public var bandwidthLimitMBps: Double?
 
     public init() {}
 
@@ -37,6 +39,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         autoReconnect = try c.decodeIfPresent(Bool.self, forKey: .autoReconnect) ?? d.autoReconnect
         setupCompleted = try c.decodeIfPresent(Bool.self, forKey: .setupCompleted) ?? d.setupCompleted
         googleClientID = try c.decodeIfPresent(String.self, forKey: .googleClientID)
+        bandwidthLimitMBps = try c.decodeIfPresent(Double.self, forKey: .bandwidthLimitMBps)
     }
 }
 

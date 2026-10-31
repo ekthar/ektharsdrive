@@ -25,6 +25,21 @@ public struct RcClient: Sendable {
         return try result.get()
     }
 
+    /// Calls an rc method with arbitrary JSON parameters (nested objects, booleans).
+    public func callJSON(_ method: String, _ params: [String: any Sendable]) async throws(DriveError) -> [String: Any] {
+        let path = socketPath, timeout = timeoutSeconds
+        let body = (try? JSONSerialization.data(withJSONObject: params)) ?? Data("{}".utf8)
+        let result: Result<Data, DriveError> = await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .utility).async {
+                cont.resume(returning: Result { () throws(DriveError) -> Data in
+                    try UnixHTTP.post(socketPath: path, path: "/" + method, body: body, timeoutSeconds: timeout)
+                })
+            }
+        }
+        let data = try result.get()
+        return ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:]
+    }
+
     public func decode<T: Decodable>(_ type: T.Type, _ method: String, params: [String: String] = [:]) async throws(DriveError) -> T {
         let data = try await call(method, params: params)
         do {

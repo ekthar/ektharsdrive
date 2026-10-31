@@ -384,12 +384,42 @@ enum FileIcons {
     static func bitmap(for item: FileItem) -> CGImage {
         let key = item.isDirectory ? "/folder" : item.pathExtension.lowercased()
         if let b = bitmaps[key] { return b }
-        let image = icon(for: item)
-        var rect = CGRect(x: 0, y: 0, width: 128, height: 128)
-        let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: [.interpolation: NSImageInterpolation.high.rawValue])
-            ?? NSImage(size: NSSize(width: 1, height: 1)).cgImage(forProposedRect: nil, context: nil, hints: nil)!
+        // Draw into an exact 128x128 bitmap. Asking NSImage for "a" CGImage returned its largest
+        // representation (up to 1024 px), which then drew far bigger than its frame and covered the names.
+        let px = 128
+        let ctx = CGContext(data: nil, width: px, height: px, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.interpolationQuality = .high
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        icon(for: item).draw(in: NSRect(x: 0, y: 0, width: px, height: px), from: .zero, operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        let cg = ctx.makeImage()!
         bitmaps[key] = cg
         return cg
+    }
+
+    /// Google Docs/Sheets/Slides have no size in Drive (rclone reports -1, the mount shows 0) and are
+    /// exported on open. Say so instead of showing a misleading "Zero KB".
+    static func sizeLabel(for item: FileItem) -> String {
+        if item.isDirectory { return "Folder" }
+        if (item.size ?? 0) == 0, let kind = googleNativeKind(item.pathExtension) { return kind }
+        return ByteFormat.string(item.size)
+    }
+
+    static func googleNativeKind(_ ext: String) -> String? {
+        switch ext.lowercased() {
+        case "docx", "doc", "odt": "Google Doc"
+        case "xlsx", "xls", "ods": "Google Sheet"
+        case "pptx", "ppt", "odp": "Google Slides"
+        case "pdf": nil
+        default: nil
+        }
+    }
+
+    static func isVideo(_ item: FileItem) -> Bool {
+        guard !item.isDirectory, let t = UTType(filenameExtension: item.pathExtension) else { return false }
+        return t.conforms(to: .movie) || t.conforms(to: .video)
     }
 
     static func kind(for item: FileItem) -> String {

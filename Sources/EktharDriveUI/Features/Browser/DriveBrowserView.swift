@@ -1,4 +1,5 @@
 import EktharDriveCore
+import QuickLook
 import SwiftUI
 
 /// Finder-style view of one drive: toolbar navigation, icon/list content, path + status bar, inspector.
@@ -36,8 +37,21 @@ struct DriveBrowserView: View {
             .navigationSubtitle(rt.phase.isActive ? (browser.loading && browser.items.isEmpty ? "Loading…" : "\(browser.visibleItems.count) items") : rt.connection.label)
             .searchable(text: $browser.search, placement: .toolbar, prompt: "Search \(browser.current?.lastPathComponent ?? d.name)")
             .toolbar { toolbar(d, rt) }
-            .background(GeometryReader { g in Color.clear.preference(key: DetailWidthKey.self, value: g.size.width) })
-            .onPreferenceChange(DetailWidthKey.self) { w in Task { @MainActor in browser.fitInspector(detailWidth: w) } }
+            .quickLookPreview($browser.quickLookURL)
+            .onKeyPress(.space) { browser.toggleQuickLook(); return .handled }
+            .overlay(alignment: .bottom) {
+                if let toast = browser.toast {
+                    Text(toast)
+                        .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(Capsule().fill(Theme.ink.opacity(0.88)))
+                        .shadow(color: .black.opacity(0.2), radius: 12, y: 6)
+                        .padding(.bottom, 52)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(Theme.spring, value: browser.toast)
+            .onChange(of: model.windowWidth, initial: true) { _, w in browser.fitInspector(windowWidth: w) }
             .inspector(isPresented: $browser.showInspector) {
                 DriveInspector(drive: d, browser: browser)
                     .inspectorColumnWidth(min: 250, ideal: 280, max: 360)
@@ -185,7 +199,7 @@ struct FileGridView: View {
                         .onTapGesture(count: 2) { browser.open(item) }
                         .onTapGesture { withAnimation(Theme.snappy) { browser.select(item, extend: NSEvent.modifierFlags.contains(.command)) } }
                         .contextMenu { FileContextMenu(item: item, browser: browser, actions: actions) }
-                        .draggable(item.url)
+                        .onDrag { NSItemProvider(contentsOf: item.url) ?? NSItemProvider(object: item.url as NSURL) }
                         .dropDestination(for: URL.self) { urls, _ in
                             guard item.isDirectory else { return false }
                             Task { await browser.receive(urls, into: item.url) }
@@ -211,7 +225,10 @@ struct FileTile: View {
     var body: some View {
         VStack(spacing: 8) {
             Image(decorative: FileIcons.bitmap(for: item), scale: 2)
+                .resizable()
+                .interpolation(.high)
                 .frame(width: 64, height: 64)
+                .clipped()
                 .shadow(color: .black.opacity(hovering ? 0.14 : 0), radius: 8, y: 5)
                 .scaleEffect(hovering && !selected ? 1.05 : 1)
             VStack(spacing: 2) {
@@ -221,7 +238,7 @@ struct FileTile: View {
                     .truncationMode(.middle)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(selected ? Theme.accent : Theme.ink)
-                Text(item.isDirectory ? "Folder" : ByteFormat.string(item.size))
+                Text(FileIcons.sizeLabel(for: item))
                     .font(.system(size: 10.5)).monospacedDigit().foregroundStyle(Theme.inkTertiary)
             }
         }
@@ -256,7 +273,7 @@ struct FileListView: View {
                     Image(nsImage: FileIcons.icon(for: item)).resizable().frame(width: 18, height: 18)
                     Text(item.name).lineLimit(1).truncationMode(.middle)
                 }
-                .draggable(item.url)
+                .onDrag { NSItemProvider(contentsOf: item.url) ?? NSItemProvider(object: item.url as NSURL) }
             }
             .width(min: 220, ideal: 340)
             TableColumn("Date Modified") { item in
@@ -264,7 +281,7 @@ struct FileListView: View {
             }
             .width(min: 120, ideal: 170)
             TableColumn("Size") { item in
-                Text(item.isDirectory ? "--" : ByteFormat.string(item.size)).monospacedDigit().foregroundStyle(.secondary)
+                Text(item.isDirectory ? "--" : FileIcons.sizeLabel(for: item)).monospacedDigit().foregroundStyle(.secondary)
             }
             .width(min: 60, ideal: 90)
             TableColumn("Kind") { item in Text(FileIcons.kind(for: item)).foregroundStyle(.secondary) }
@@ -289,6 +306,7 @@ struct FileListView: View {
 // MARK: - Menus
 
 struct FileContextMenu: View {
+    @Environment(DriveManager.self) private var drives
     let item: FileItem
     let browser: FileBrowserModel
     let actions: FileActions
@@ -296,10 +314,34 @@ struct FileContextMenu: View {
     var body: some View {
         let targets = browser.selection.contains(item.url) && browser.selection.count > 1 ? Array(browser.selection) : [item.url]
         Button("Open") { browser.open(item) }
+        if !item.isDirectory {
+            Button("Quick Look") { browser.quickLookURL = item.url }
+            if FileIcons.isVideo(item) {
+                Button("Play in QuickTime") {
+                    let qt = URL(fileURLWithPath: "/System/Applications/QuickTime Player.app")
+                    NSWorkspace.shared.open([item.url], withApplicationAt: qt, configuration: NSWorkspace.OpenConfiguration())
+                }
+            }
+        }
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
         Divider()
         Button("Rename…") { actions.rename(item) }.disabled(targets.count > 1)
         Button(targets.count > 1 ? "Download \(targets.count) Items…" : "Download a Copy…") { actions.download(targets) }
+        if drives.drive(browser.driveID)?.provider == .googleDrive {
+            Button("Copy Share Link") { Task { await browser.copyShareLink(item, drives: drives) } }.disabled(targets.count > 1)
+        }
+        let others = drives.copyTargets(from: browser.driveID)
+        if !others.isEmpty {
+            Menu("Copy to") {
+                ForEach(others) { t in
+                    Button(t.name) {
+                        let chosen = browser.items.filter { targets.contains($0.url) }
+                        Task { await browser.copy(chosen, to: t, drives: drives) }
+                    }
+                    .disabled(!drives.state(t.id).connection.isConfigured)
+                }
+            }
+        }
         Button("Copy Path") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(item.url.path, forType: .string)
@@ -368,7 +410,10 @@ struct BrowserBottomBar: View {
                         .help("\(pending) upload\(pending == 1 ? "" : "s") in progress")
                         .transition(.scale.combined(with: .opacity))
                 }
-                if browser.loading { ProgressView().controlSize(.mini) }
+                if let busy = browser.busyMessage {
+                    ProgressView().controlSize(.mini)
+                    Text(busy).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.accent).lineLimit(1)
+                } else if browser.loading { ProgressView().controlSize(.mini) }
                 ViewThatFits(in: .horizontal) {
                     Text(statusText).lineLimit(1)
                     Text(shortStatusText).lineLimit(1)

@@ -11,6 +11,9 @@ CONFIG="${CONFIG:-release}"
 ARCHS="${ARCHS:-arm64}"
 VERSION="${VERSION:-1.0.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)}"
+if [ -z "${SIGN_IDENTITY:-}" ] && security find-certificate -c "Ekthar Drive Local" >/dev/null 2>&1; then
+  SIGN_IDENTITY="Ekthar Drive Local"   # stable local identity: Keychain "Always Allow" survives rebuilds
+fi
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 APP_NAME="Ekthar Drive"
 BUILD_DIR="$ROOT/build"

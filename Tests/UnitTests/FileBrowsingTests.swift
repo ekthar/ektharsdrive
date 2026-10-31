@@ -81,6 +81,37 @@ import Testing
         #expect(out[0].lastPathComponent == "keep 2.txt")
     }
 
+    @Test func copiesWholeFoldersInAndOut() async throws {
+        let root = try makeTempDir("fbroot")
+        let outside = try makeTempDir("fbsrc")
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: outside) }
+        let src = outside.appendingPathComponent("Project")
+        try FileManager.default.createDirectory(at: src.appendingPathComponent("sub/deeper"), withIntermediateDirectories: true)
+        try Data("a".utf8).write(to: src.appendingPathComponent("a.txt"))
+        try Data("b".utf8).write(to: src.appendingPathComponent("sub/deeper/b.txt"))
+
+        let copied = try await FileBrowsing.copyIn([src], to: root, root: root)
+        #expect(try String(contentsOf: copied[0].appendingPathComponent("sub/deeper/b.txt"), encoding: .utf8) == "b", "folder copied with its tree")
+        let again = try await FileBrowsing.copyIn([src], to: root, root: root)
+        #expect(again[0].lastPathComponent == "Project 2", "never merges into or overwrites an existing folder")
+
+        let back = try await FileBrowsing.copyOut([copied[0]], to: outside)
+        #expect(back[0].lastPathComponent == "Project 2")
+        #expect(FileManager.default.fileExists(atPath: back[0].appendingPathComponent("a.txt").path))
+        await #expect(throws: DriveError.self) { _ = try await FileBrowsing.copyIn([root], to: root.appendingPathComponent("Project"), root: root) }
+    }
+
+    @Test func cloudPathsAreRelativeToTheMountAndDriveBase() {
+        #expect(CloudActions.remotePath(of: URL(fileURLWithPath: "/Users/e/Volumes/Google Drive/Work/a b.pdf"), mountPath: "/Users/e/Volumes/Google Drive") == "Work/a b.pdf")
+        #expect(CloudActions.remotePath(of: URL(fileURLWithPath: "/Users/e/Volumes/Google Drive 2/x"), mountPath: "/Users/e/Volumes/Google Drive") == nil, "lookalike prefix")
+        #expect(CloudActions.remotePath(of: URL(fileURLWithPath: "/Users/e/Volumes/Google Drive"), mountPath: "/Users/e/Volumes/Google Drive") == "")
+        let oracle = CloudActions(rc: RcClient(socketPath: "/x"), drive: .oracleDefault)
+        #expect(oracle.fullRemote("Work/a.pdf") == "/srv/ekthar-drive/files/Work/a.pdf")
+        #expect(oracle.fullRemote("") == "/srv/ekthar-drive/files")
+        let google = CloudActions(rc: RcClient(socketPath: "/x"), drive: .googleDefault)
+        #expect(google.fullRemote("Work/a.pdf") == "Work/a.pdf")
+    }
+
     @Test func breadcrumbs() {
         let root = URL(fileURLWithPath: "/Volumes/Google Drive")
         let crumbs = FileBrowsing.breadcrumbs(for: root.appendingPathComponent("Work/2026"), root: root, rootName: "Google Drive")

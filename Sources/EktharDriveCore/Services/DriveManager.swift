@@ -323,6 +323,7 @@ public final class DriveManager {
             log(id, "mount", "\(d.name) mounted at \(mountPath) (\(engine.displayName)).", .info)
             lastUsageRefresh[id] = nil
             Task { await self.refreshUsage(id) }
+            if let limit = settings.bandwidthLimitMBps, limit > 0 { try? await cloudActions(id)?.setBandwidth(megabytesPerSecond: limit) }
             Task.detached(priority: .utility) { [paths] in await Self.prewarm(socket: paths.rcSocket(for: id).path, mountPath: mountPath) }
         } catch let error as DriveError {
             mountFailed(d, error)
@@ -619,6 +620,26 @@ public final class DriveManager {
         await refreshConfiguredState()
         for d in drives where state(d.id).connection.isConfigured { await refreshUsage(d.id) }
         _ = await pollOnce()
+    }
+
+    // MARK: Cloud actions
+
+    public func cloudActions(_ id: String) -> CloudActions? {
+        guard let d = drive(id), state(id).phase.isActive else { return nil }
+        return CloudActions(rc: RcClient(socketPath: paths.rcSocket(for: id).path, timeoutSeconds: 60), drive: d)
+    }
+
+    /// Other drives a file can be copied to directly (configured in the same rclone.conf).
+    public func copyTargets(from id: String) -> [DriveConfiguration] {
+        drives.filter { $0.id != id && state($0.id).connection.isConfigured }
+    }
+
+    /// Applies the saved speed limit to every running drive.
+    public func applyBandwidthLimit() async {
+        let limit = settings.bandwidthLimitMBps.flatMap { $0 > 0 ? $0 : nil }
+        for d in drives where state(d.id).phase.isActive {
+            try? await cloudActions(d.id)?.setBandwidth(megabytesPerSecond: limit)
+        }
     }
 
     // MARK: Network / sleep

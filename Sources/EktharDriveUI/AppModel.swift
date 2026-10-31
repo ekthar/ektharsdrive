@@ -13,6 +13,8 @@ public final class AppModel {
     var selection: SidebarItem? = .dashboard
     var settingsTab: SettingsTab = .accounts
     var showSetup = false
+    /// Current main-window width, for layout decisions that must not depend on the content they change.
+    var windowWidth: CGFloat = 0
     @ObservationIgnored private var browsers: [String: FileBrowserModel] = [:]
 
     /// One browser per drive so location and history survive switching drives.
@@ -36,7 +38,7 @@ public final class AppModel {
             database = try! AppDatabase(url: fallback)
             fatalError = "The local database could not be opened (\(error.localizedDescription)). Settings will not be saved this session."
         }
-        drives = DriveManager(paths: paths, secrets: CachingSecretStore(base: KeychainStore()), database: database, notifier: UserNotifier())
+        drives = DriveManager(paths: paths, secrets: CachingSecretStore(base: BundledKeychainStore()), database: database, notifier: UserNotifier())
     }
 
     /// For previews and the snapshot tool: wrap an existing manager.
@@ -77,6 +79,7 @@ public final class AppModel {
 public enum SidebarItem: Hashable {
     case dashboard
     case drive(String)
+    case collection(String, CloudActions.Collection)
     case transfers, cache, activity
 }
 

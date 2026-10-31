@@ -74,6 +74,15 @@ struct GeneralSettingsView: View {
                 Picker("Appearance", selection: binding(\.theme)) { ForEach(AppTheme.allCases, id: \.self) { Text($0.label) } }
                 Toggle("Reconnect automatically after errors", isOn: binding(\.autoReconnect))
             }
+            Section("Speed") {
+                Picker("Limit transfers to", selection: Binding(
+                    get: { drives.settings.bandwidthLimitMBps ?? 0 },
+                    set: { v in model.updateSettings { $0.bandwidthLimitMBps = v > 0 ? v : nil }; Task { await drives.applyBandwidthLimit() } })) {
+                    Text("No limit").tag(0.0)
+                    ForEach([1.0, 2, 5, 10, 25, 50], id: \.self) { Text("\(Int($0)) MB/s").tag($0) }
+                }
+                Text("Applies to uploads and downloads on every drive right away.").font(.caption).foregroundStyle(.secondary)
+            }
             ForEach(drives.drives) { d in DriveSettingsSection(drive: d) }
         }
         .formStyle(.grouped)

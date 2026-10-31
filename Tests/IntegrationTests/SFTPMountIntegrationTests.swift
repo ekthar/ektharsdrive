@@ -281,6 +281,31 @@ struct SFTPMountIntegrationTests {
         }
     }
 
+    @Test func speedLimitAndCloudListingThroughRunningProcess() async throws {
+        try await withHarness(name: "ca") { h in
+            try await h.connect()
+            await h.manager.mount("oracle")
+            let actions = try #require(h.manager.cloudActions("oracle"))
+            try await actions.setBandwidth(megabytesPerSecond: 2)
+            let limited = try await actions.rc.callJSON("core/bwlimit", [:])
+            #expect((limited["rate"] as? String)?.hasPrefix("2") == true, "limit applied live: \(limited)")
+            try await actions.setBandwidth(megabytesPerSecond: nil)
+            let off = try await actions.rc.callJSON("core/bwlimit", [:])
+            #expect((off["rate"] as? String) == "off")
+            // Cloud-side copy within the same remote, through the running rclone (no Mac disk involved).
+            // Write through the mount like a user would (the test SFTP server caches its own listings).
+            let mnt = URL(fileURLWithPath: h.mountPath)
+            try FileManager.default.createDirectory(at: mnt.appendingPathComponent("copies"), withIntermediateDirectories: true)
+            try Data("hello".utf8).write(to: mnt.appendingPathComponent("src.txt"))
+            #expect(await eventually(.seconds(30)) { await h.pending() == 0 })
+            var self2 = h.manager.drive("oracle")!
+            self2.id = "oracle-copy"; self2.remotePath = "/files/copies"
+            let job = try await actions.copy(relativePath: "src.txt", isDirectory: false, to: self2)
+            #expect(job > 0, "async job started")
+            #expect(await eventually(.seconds(20)) { FileManager.default.fileExists(atPath: h.server.data.appendingPathComponent("files/copies/src.txt").path) })
+        }
+    }
+
     @Test func hostKeyMismatchIsRefusedAndNeverRetried() async throws {
         try await withHarness(name: "hk") { h in
             try await h.connect()
