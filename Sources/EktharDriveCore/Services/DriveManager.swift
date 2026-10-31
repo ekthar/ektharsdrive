@@ -777,7 +777,10 @@ public final class DriveManager {
         guard timeMachineDriveID == nil else { throw .invalidConfiguration("A Time Machine disk already exists.") }
         timeMachineBusy = "Creating the backup disk…"
         defer { timeMachineBusy = nil }
-        try await TimeMachineDisk.create(mountPath: mount, sizeGB: sizeGB)
+        do { try await TimeMachineDisk.create(mountPath: mount, sizeGB: sizeGB) } catch {
+            log(id, "timemachine", "Could not create the Time Machine disk: \(error.detail)", .error)
+            throw error
+        }
         log(id, "timemachine", "Created a \(sizeGB) GB Time Machine disk on \(d.name).", .info)
         await openTimeMachineDisk(id)
     }

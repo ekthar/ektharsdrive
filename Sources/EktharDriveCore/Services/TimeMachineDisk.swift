@@ -39,7 +39,23 @@ public enum TimeMachineDisk {
         guard (50...16_000).contains(sizeGB) else { throw .invalidConfiguration("Pick a size between 50 GB and 16 TB.") }
         let bundle = bundleURL(mountPath: mountPath)
         guard !FileManager.default.fileExists(atPath: bundle.path) else { throw .invalidConfiguration("A Time Machine disk already exists on this drive.") }
-        try await run(createArguments(bundle: bundle, sizeGB: sizeGB), timeout: .seconds(300), what: "Creating the backup disk")
+        // hdiutil sets extended attributes while creating, and rclone volumes (macFUSE) refuse them
+        // ("create failed - error 513"). Build the empty image on this Mac (about 25 MB), then copy it
+        // over without attributes. Attaching and using it needs none.
+        let staging = FileManager.default.temporaryDirectory.appendingPathComponent("ekthar-tm-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: staging) }
+        let local = staging.appendingPathComponent(bundleName, isDirectory: true)
+        try await run(createArguments(bundle: local, sizeGB: sizeGB), timeout: .seconds(300), what: "Creating the backup disk")
+        let r: ProcessResult
+        do {
+            r = try await ProcessRunner().run(URL(fileURLWithPath: "/bin/cp"), arguments: ["-R", "-X", local.path, bundle.path],
+                                              environment: SafeEnvironment.base(), stdin: nil, timeout: .seconds(600))
+        } catch { throw .unknown("Copying the backup disk to the drive failed: \(error.localizedDescription)") }
+        guard r.succeeded, exists(mountPath: mountPath) else {
+            try? FileManager.default.removeItem(at: bundle)
+            throw .unknown("Copying the backup disk to the drive failed: \(Redactor.redact(ErrorClassifier.lastMeaningfulLine(r.combinedLines) ?? "cp exit \(r.exitCode)"))")
+        }
     }
 
     /// Attaches the image (no Finder window; owners on, as Time Machine requires).
