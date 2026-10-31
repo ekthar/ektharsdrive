@@ -181,7 +181,7 @@ struct FileGridView: View {
                 }
                 ForEach(Array(browser.visibleItems.enumerated()), id: \.element.id) { i, item in
                     FileTile(item: item, selected: browser.selection.contains(item.url))
-                        .appearAnimation(index: i, offset: 8)
+                        .appearAnimation(index: i, offset: 8, enabled: i < 24)
                         .onTapGesture(count: 2) { browser.open(item) }
                         .onTapGesture { withAnimation(Theme.snappy) { browser.select(item, extend: NSEvent.modifierFlags.contains(.command)) } }
                         .contextMenu { FileContextMenu(item: item, browser: browser, actions: actions) }
@@ -210,10 +210,9 @@ struct FileTile: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Image(nsImage: FileIcons.icon(for: item))
-                .resizable().interpolation(.high)
+            Image(decorative: FileIcons.bitmap(for: item), scale: 2)
                 .frame(width: 64, height: 64)
-                .shadow(color: .black.opacity(hovering ? 0.14 : 0.06), radius: hovering ? 8 : 3, y: hovering ? 5 : 2)
+                .shadow(color: .black.opacity(hovering ? 0.14 : 0), radius: 8, y: 5)
                 .scaleEffect(hovering && !selected ? 1.05 : 1)
             VStack(spacing: 2) {
                 Text(item.name)

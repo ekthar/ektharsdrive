@@ -11,13 +11,13 @@ final class FileBrowserModel {
     let driveID: String
     private(set) var root: URL?
     private(set) var current: URL?
-    private(set) var items: [FileItem] = []
+    private(set) var items: [FileItem] = [] { didSet { recompute() } }
     private(set) var loading = false
     var selection: Set<URL> = []
     var error: DriveError?
-    var search = ""
-    var sort: FileSort = .name
-    var ascending = true
+    var search = "" { didSet { if search != oldValue { recompute() } } }
+    var sort: FileSort = .name { didSet { if sort != oldValue { recompute() } } }
+    var ascending = true { didSet { if ascending != oldValue { recompute() } } }
     var viewMode: BrowserViewMode {
         didSet { UserDefaults.standard.set(viewMode.rawValue, forKey: "browser.viewMode") }
     }
@@ -51,9 +51,12 @@ final class FileBrowserModel {
     var canGoForward: Bool { !forwardStack.isEmpty }
     var canGoUp: Bool { guard let root, let current else { return false } ; return current.standardizedFileURL != root.standardizedFileURL }
 
-    var visibleItems: [FileItem] {
+    /// Filtered + sorted once per change, not on every redraw (big folders made scrolling stutter).
+    private(set) var visibleItems: [FileItem] = []
+
+    private func recompute() {
         let filtered = search.isEmpty ? items : items.filter { $0.name.localizedCaseInsensitiveContains(search) }
-        return FileBrowsing.sorted(filtered, by: sort, ascending: ascending)
+        visibleItems = FileBrowsing.sorted(filtered, by: sort, ascending: ascending)
     }
 
     var selectedItems: [FileItem] { items.filter { selection.contains($0.url) } }

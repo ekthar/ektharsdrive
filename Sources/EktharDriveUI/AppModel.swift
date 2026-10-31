@@ -36,7 +36,7 @@ public final class AppModel {
             database = try! AppDatabase(url: fallback)
             fatalError = "The local database could not be opened (\(error.localizedDescription)). Settings will not be saved this session."
         }
-        drives = DriveManager(paths: paths, secrets: KeychainStore(), database: database, notifier: UserNotifier())
+        drives = DriveManager(paths: paths, secrets: CachingSecretStore(base: KeychainStore()), database: database, notifier: UserNotifier())
     }
 
     /// For previews and the snapshot tool: wrap an existing manager.

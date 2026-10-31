@@ -50,6 +50,8 @@ public final class DriveManager {
     @ObservationIgnored private var lastLoggedError: [String: (String, Date)] = [:]
     @ObservationIgnored private var started = false
     @ObservationIgnored private var mountingNow: Set<String> = []
+    /// Set when rclone.conf could not be read at startup; auto-mount retries once this clears.
+    public private(set) var configReadError: DriveError?
     @ObservationIgnored private var pollFailures: [String: Int] = [:]
     static let pollFailuresBeforeError = 3
     /// Set once macFUSE fails to mount in Automatic mode; later mounts this session go straight to NFS.
@@ -137,6 +139,8 @@ public final class DriveManager {
             Task { @MainActor in self?.networkChanged(online) }
         }
 
+        // Read Keychain secrets off the main thread first: a Keychain permission prompt blocks the caller.
+        if let caching = secrets as? CachingSecretStore { await caching.warmUp() }
         await refreshDependencies()
         await refreshConfiguredState()
         await adoptRunningMounts()
@@ -188,7 +192,18 @@ public final class DriveManager {
             for d in drives { update(d.id) { $0.connection = .notConfigured } }
             return
         }
-        let remotes = Set((try? await rclone.listRemotes()) ?? [])
+        let remotes: Set<String>
+        do {
+            remotes = Set(try await rclone.listRemotes())
+        } catch {
+            // Do NOT report "not connected" when we simply could not read the config (e.g. the Keychain
+            // refused access to its password). That hid the real cause and skipped auto-mount.
+            log(nil, "config", "Could not read the drive configuration: \(error.title). \(error.detail)", .error)
+            for d in drives { update(d.id) { $0.lastError = error } }
+            configReadError = error
+            return
+        }
+        configReadError = nil
         for d in drives {
             let configured = remotes.contains(d.remoteName)
             update(d.id) { rt in
@@ -486,7 +501,9 @@ public final class DriveManager {
     /// Returns true when transfers are active (poll faster).
     @discardableResult
     public func pollOnce() async -> Bool {
-        diskWarning = cacheManager.diskWarning(minFreeBytes: settings.globals.minFreeSpaceBytes)
+        // Assign only on change: every write to observed state redraws every screen that reads it.
+        let warning = cacheManager.diskWarning(minFreeBytes: settings.globals.minFreeSpaceBytes)
+        if warning != diskWarning { diskWarning = warning }
         for id in await supervisor.checkAdopted() where desiredMounted.contains(id) {
             if let d = drive(id) { finishStopped(id); scheduleRetryOrFail(d, .processExited(code: -1, detail: "The reattached rclone process stopped.")) }
         }
@@ -516,7 +533,7 @@ public final class DriveManager {
                 var tracker = trackers[d.id] ?? TransferTracker(driveID: d.id, remoteName: d.remoteName)
                 let result = tracker.update(transferring: stats.transferring ?? [], completed: done, queue: queue)
                 trackers[d.id] = tracker
-                activeTransfers[d.id] = result.active
+                if activeTransfers[d.id] != result.active { activeTransfers[d.id] = result.active }
                 for t in result.finished {
                     try? database.upsertTransfer(t)
                     transferHistory.insert(t, at: 0)
@@ -524,7 +541,7 @@ public final class DriveManager {
                 }
                 if transferHistory.count > 500 { transferHistory.removeLast(transferHistory.count - 500) }
                 update(d.id) {
-                    $0.cache = cache
+                    if $0.cache?.sameMeasurement(as: cache) != true { $0.cache = cache }
                     // A good answer clears any earlier "not answering" state.
                     switch $0.lastError {
                     case .rcUnavailable?, .timeout?: $0.lastError = nil

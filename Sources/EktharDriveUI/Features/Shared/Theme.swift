@@ -93,7 +93,9 @@ extension View {
     func hoverLift(_ amount: CGFloat = 1.012) -> some View { modifier(HoverLift(scale: amount)) }
 
     /// Fades and rises into place when first shown. `index` staggers items in a list or grid.
-    func appearAnimation(index: Int = 0, offset: CGFloat = 10) -> some View { modifier(AppearIn(index: index, offset: offset)) }
+    func appearAnimation(index: Int = 0, offset: CGFloat = 10, enabled: Bool = true) -> some View {
+        modifier(AppearIn(index: index, offset: offset, enabled: enabled))
+    }
 }
 
 struct HoverLift: ViewModifier {
@@ -111,6 +113,7 @@ struct HoverLift: ViewModifier {
 struct AppearIn: ViewModifier {
     let index: Int
     let offset: CGFloat
+    var enabled = true
     @State private var shown = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -119,7 +122,9 @@ struct AppearIn: ViewModifier {
             .opacity(shown ? 1 : 0)
             .offset(y: shown || reduceMotion ? 0 : offset)
             .onAppear {
-                withAnimation(Theme.spring.delay(reduceMotion ? 0 : min(Double(index), 14) * 0.028)) { shown = true }
+                guard !shown else { return }
+                if !enabled || reduceMotion { shown = true; return }
+                withAnimation(Theme.spring.delay(min(Double(index), 14) * 0.028)) { shown = true }
             }
     }
 }
@@ -370,6 +375,21 @@ enum FileIcons {
         let image = NSWorkspace.shared.icon(for: type)
         cache[key] = image
         return image
+    }
+
+    private static var bitmaps: [String: CGImage] = [:]
+
+    /// The icon pre-rendered once per type at 128 px. Drawing a multi-size NSImage for every tile on
+    /// every scroll frame was a large part of the scrolling lag.
+    static func bitmap(for item: FileItem) -> CGImage {
+        let key = item.isDirectory ? "/folder" : item.pathExtension.lowercased()
+        if let b = bitmaps[key] { return b }
+        let image = icon(for: item)
+        var rect = CGRect(x: 0, y: 0, width: 128, height: 128)
+        let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: [.interpolation: NSImageInterpolation.high.rawValue])
+            ?? NSImage(size: NSSize(width: 1, height: 1)).cgImage(forProposedRect: nil, context: nil, hints: nil)!
+        bitmaps[key] = cg
+        return cg
     }
 
     static func kind(for item: FileItem) -> String {

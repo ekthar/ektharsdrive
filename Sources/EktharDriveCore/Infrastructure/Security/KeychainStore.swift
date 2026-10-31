@@ -73,6 +73,40 @@ public struct KeychainStore: SecretStore {
     }
 }
 
+/// Wraps the Keychain and remembers values for the life of the app, so the Keychain is asked at most once
+/// per secret per launch. Each Keychain read can show a macOS permission prompt and BLOCKS until the user
+/// answers; doing that on every rclone call (and on the main thread) froze the app.
+public final class CachingSecretStore: SecretStore, @unchecked Sendable {
+    private let base: SecretStore
+    private let cache = Locked<[SecretKey: String?]>([:])
+
+    public init(base: SecretStore) { self.base = base }
+
+    public func get(_ key: SecretKey) throws(DriveError) -> String? {
+        if let hit = cache.current[key] { return hit }
+        let value = try base.get(key)
+        cache.withLock { $0[key] = .some(value) }
+        return value
+    }
+
+    public func set(_ value: String, for key: SecretKey) throws(DriveError) {
+        try base.set(value, for: key)
+        cache.withLock { $0[key] = .some(value) }
+    }
+
+    public func delete(_ key: SecretKey) throws(DriveError) {
+        try base.delete(key)
+        cache.withLock { $0[key] = .some(nil) }
+    }
+
+    /// Reads every secret on a background thread so a Keychain prompt never blocks the UI.
+    public func warmUp() async {
+        await Task.detached(priority: .userInitiated) { [self] in
+            for key in SecretKey.allCases { _ = try? self.get(key) }
+        }.value
+    }
+}
+
 /// In-memory store for tests and previews. Never used by the shipping app.
 public final class InMemorySecretStore: SecretStore, @unchecked Sendable {
     private let values = Locked<[SecretKey: String]>([:])

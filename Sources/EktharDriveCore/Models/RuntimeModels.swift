@@ -92,6 +92,12 @@ public struct CacheStats: Sendable, Equatable {
     }
 
     public var pendingUploads: Int { uploadsInProgress + uploadsQueued }
+
+    /// Same numbers, ignoring when they were measured. Used to skip no-op UI updates.
+    public func sameMeasurement(as o: CacheStats) -> Bool {
+        bytesUsed == o.bytesUsed && files == o.files && uploadsInProgress == o.uploadsInProgress && uploadsQueued == o.uploadsQueued
+            && erroredFiles == o.erroredFiles && outOfSpace == o.outOfSpace && source == o.source
+    }
 }
 
 public enum HealthLevel: Int, Sendable, Comparable {

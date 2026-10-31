@@ -73,6 +73,9 @@ public enum MountCommandBuilder {
             // Finder previews and quick peeks then cost a few MB instead of 128 MB (rclone's default).
             "--vfs-read-chunk-size", "8M",
             "--vfs-read-chunk-size-limit", "256M",
+            // Fetch 4 chunks in parallel. Google's per-request delay is high, so one stream at a time
+            // left the network idle between chunks (measured 8.4 MB/s and slow jumps on a 109 MB video).
+            "--vfs-read-chunk-streams", "4",
         ]
         if drive.provider.supportsChangePolling { args += ["--poll-interval", "1m"] }
         if engine == .nfs {
