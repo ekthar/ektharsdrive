@@ -68,10 +68,12 @@ public enum FileBrowsing {
         a < b ? .orderedAscending : (a > b ? .orderedDescending : .orderedSame)
     }
 
-    /// True when `url` is `root` or below it (after resolving `..` and symlinks).
+    /// True when `url` is `root` or below it, after removing `.` and `..`.
+    /// Purely textual: it never touches the disk, so the UI can call it on a slow network volume without
+    /// freezing. rclone volumes contain no symlinks, so resolving them is not needed.
     public static func isInside(_ url: URL, root: URL) -> Bool {
-        let r = root.standardizedFileURL.resolvingSymlinksInPath().path
-        let u = url.standardizedFileURL.resolvingSymlinksInPath().path
+        let r = root.standardizedFileURL.path
+        let u = url.standardizedFileURL.path
         return u == r || u.hasPrefix(r.hasSuffix("/") ? r : r + "/")
     }
 

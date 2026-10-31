@@ -113,31 +113,36 @@ final class FileBrowserModel {
 
     // MARK: Operations (all confined to the mounted root)
 
-    private func perform(_ op: () throws(DriveError) -> Void) async {
-        do { try op(); error = nil } catch let e { error = e }
-        await reload()
+    /// Runs a file operation on a background thread. Every call into the mounted volume can wait on the
+    /// network, so none of them may run on the main thread (that is what froze the window).
+    private func offMain<T: Sendable>(_ op: @escaping @Sendable () throws(DriveError) -> T) async -> T? {
+        let result: Result<T, DriveError> = await Task.detached(priority: .userInitiated) {
+            Result { () throws(DriveError) -> T in try op() }
+        }.value
+        switch result {
+        case .success(let v): error = nil; return v
+        case .failure(let e): error = e; return nil
+        }
     }
 
     func newFolder() async {
         guard let root, let current else { return }
-        do {
-            let url = try FileBrowsing.createFolder(in: current, root: root)
-            await reload()
-            selection = [url]
-        } catch let e { error = e }
+        let url = await offMain { () throws(DriveError) in try FileBrowsing.createFolder(in: current, root: root) }
+        await reload()
+        if let url { selection = [url] }
     }
 
     func rename(_ item: FileItem, to name: String) async {
         guard let root else { return }
-        await perform { () throws(DriveError) in
-            let url = try FileBrowsing.rename(item.url, to: name, root: root)
-            selection = [url]
-        }
+        let url = await offMain { () throws(DriveError) in try FileBrowsing.rename(item.url, to: name, root: root) }
+        await reload()
+        if let url { selection = [url] }
     }
 
     func delete(_ urls: [URL]) async {
         guard let root else { return }
-        await perform { () throws(DriveError) in try FileBrowsing.delete(urls, root: root) }
+        _ = await offMain { () throws(DriveError) in try FileBrowsing.delete(urls, root: root) }
+        await reload()
     }
 
     /// Drop handler: items already on this drive are moved, anything else is copied in (uploaded).
@@ -145,11 +150,12 @@ final class FileBrowserModel {
         guard let root, let target = folder ?? current else { return }
         let local = urls.filter { FileBrowsing.isInside($0, root: root) }
         let external = urls.filter { !FileBrowsing.isInside($0, root: root) }
-        do {
-            if !local.isEmpty { _ = try FileBrowsing.move(local, into: target, root: root) }
-            if !external.isEmpty { _ = try await FileBrowsing.copyIn(external, to: target, root: root) }
-            error = nil
-        } catch let e { error = e }
+        if !local.isEmpty {
+            _ = await offMain { () throws(DriveError) in try FileBrowsing.move(local, into: target, root: root) }
+        }
+        if !external.isEmpty {
+            do { _ = try await FileBrowsing.copyIn(external, to: target, root: root); error = nil } catch let e { error = e }
+        }
         await reload()
     }
 
