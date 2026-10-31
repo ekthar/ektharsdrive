@@ -11,7 +11,7 @@ struct EktharDriveApp: App {
             RootView()
                 .environment(appDelegate.model)
                 .environment(appDelegate.model.drives)
-                .frame(minWidth: 860, minHeight: 560)
+                .frame(minWidth: Layout.windowMinWidth, minHeight: 600)
         }
         .defaultSize(width: 1080, height: 720)
         .windowToolbarStyle(.unified)

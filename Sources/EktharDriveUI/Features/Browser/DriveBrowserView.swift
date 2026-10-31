@@ -33,9 +33,11 @@ struct DriveBrowserView: View {
             .animation(Theme.spring, value: rt.phase.isActive)
             .animation(Theme.spring, value: browser.error)
             .navigationTitle(rt.phase.isActive ? (browser.current?.standardizedFileURL == browser.root?.standardizedFileURL ? d.name : (browser.current?.lastPathComponent ?? d.name)) : d.name)
-            .navigationSubtitle(rt.phase.isActive ? "\(browser.visibleItems.count) items" : rt.connection.label)
+            .navigationSubtitle(rt.phase.isActive ? (browser.loading && browser.items.isEmpty ? "Loading…" : "\(browser.visibleItems.count) items") : rt.connection.label)
             .searchable(text: $browser.search, placement: .toolbar, prompt: "Search \(browser.current?.lastPathComponent ?? d.name)")
             .toolbar { toolbar(d, rt) }
+            .background(GeometryReader { g in Color.clear.preference(key: DetailWidthKey.self, value: g.size.width) })
+            .onPreferenceChange(DetailWidthKey.self) { w in Task { @MainActor in browser.fitInspector(detailWidth: w) } }
             .inspector(isPresented: $browser.showInspector) {
                 DriveInspector(drive: d, browser: browser)
                     .inspectorColumnWidth(min: 250, ideal: 280, max: 360)
@@ -153,7 +155,7 @@ struct DriveBrowserView: View {
                 Button { Task { await drives.mount(d.id) } } label: { Label("Mount", systemImage: "play.fill") }
                     .disabled(rt.phase == .mounting)
             }
-            Button { browser.showInspector.toggle() } label: { Image(systemName: "sidebar.right") }
+            Button { withAnimation(Theme.spring) { browser.toggleInspector() } } label: { Image(systemName: "sidebar.right") }
                 .help("Show or hide info")
         }
     }
@@ -362,12 +364,18 @@ struct BrowserBottomBar: View {
             Spacer(minLength: 0)
             HStack(spacing: 8) {
                 if let pending = rt.cache?.pendingUploads, pending > 0 {
-                    Pill(text: "Uploading \(pending)", color: Theme.accent, symbol: "arrow.up")
+                    Pill(text: "\(pending)", color: Theme.accent, symbol: "arrow.up")
+                        .fixedSize()
+                        .help("\(pending) upload\(pending == 1 ? "" : "s") in progress")
                         .transition(.scale.combined(with: .opacity))
                 }
                 if browser.loading { ProgressView().controlSize(.mini) }
-                Text(statusText).font(.system(size: 11, weight: .medium)).monospacedDigit().foregroundStyle(Theme.inkSecondary)
-                    .contentTransition(.numericText())
+                ViewThatFits(in: .horizontal) {
+                    Text(statusText).lineLimit(1)
+                    Text(shortStatusText).lineLimit(1)
+                }
+                .font(.system(size: 11, weight: .medium)).monospacedDigit().foregroundStyle(Theme.inkSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.trailing, 14)
             .animation(Theme.snappy, value: rt.cache?.pendingUploads)
@@ -375,6 +383,11 @@ struct BrowserBottomBar: View {
         .frame(height: 36)
         .background(Theme.surface)
         .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
+    }
+
+    private var shortStatusText: String {
+        let n = browser.visibleItems.count
+        return browser.selection.isEmpty ? "\(n) items" : "\(browser.selection.count) selected"
     }
 
     private var statusText: String {
@@ -473,4 +486,10 @@ struct NotMountedView: View {
                 .contentTransition(.numericText())
         }
     }
+}
+
+
+struct DetailWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }

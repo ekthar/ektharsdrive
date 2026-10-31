@@ -22,6 +22,23 @@ final class FileBrowserModel {
         didSet { UserDefaults.standard.set(viewMode.rawValue, forKey: "browser.viewMode") }
     }
     var showInspector = true
+    /// The user's own choice; automatic hiding on narrow windows never overrides it.
+    private var userWantsInspector = true
+    private var autoHidden = false
+
+    func toggleInspector() {
+        userWantsInspector.toggle()
+        autoHidden = false
+        showInspector = userWantsInspector
+    }
+
+    /// Below this width the file area gets too cramped next to the info panel, and macOS starts
+    /// collapsing the sidebar into an overlay. Hide the panel instead, and bring it back when there is room.
+    func fitInspector(detailWidth: CGFloat) {
+        guard detailWidth > 0 else { return }
+        if showInspector, detailWidth < Layout.hideInspectorBelow { autoHidden = true; showInspector = false }
+        else if !showInspector, autoHidden, userWantsInspector, detailWidth >= Layout.showInspectorAbove { autoHidden = false; showInspector = true }
+    }
     private var backStack: [URL] = []
     private var forwardStack: [URL] = []
 

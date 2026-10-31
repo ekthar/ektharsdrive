@@ -96,6 +96,15 @@ Task { @MainActor in
     let size = CGSize(width: 1320, height: 840)
     func root() -> some View { RootView().environment(model).environment(drives) }
 
+    if CommandLine.arguments.contains("--small") {
+        // The size of the user's window in their screenshot.
+        let small = CGSize(width: 930, height: 620)
+        model.select(.drive("google"))
+        await snapshot(root(), size: small, name: "small-browser", settle: 2.4)
+        model.select(.dashboard)
+        await snapshot(root(), size: small, name: "small-overview", settle: 2.2)
+        exit(0)
+    }
     model.select(.dashboard)
     await snapshot(root(), size: size, name: "1-overview", settle: 2.2)
     model.select(.drive("google"))
