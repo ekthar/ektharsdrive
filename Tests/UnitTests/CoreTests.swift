@@ -191,6 +191,28 @@ import Testing
         if case .processExited(let code, _) = ErrorClassifier.classify(output: ["something odd"], exitCode: 3) { #expect(code == 3) } else { Issue.record("expected processExited") }
     }
 
+    @Test func explainsGoogleAPIErrors() {
+        let disabled = """
+        Failed to about: googleapi: got HTTP response code 403 with body: {
+          "error": {
+            "code": 403,
+            "message": "Google Drive API has not been used in project 47754236417 before or it is disabled.",
+            "details": [ { "@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "SERVICE_DISABLED" } ]
+          }
+        }
+        """
+        let e = ErrorClassifier.classify(output: disabled.components(separatedBy: "\n"), exitCode: 1)
+        if case .authenticationFailed(let d) = e {
+            #expect(d.contains("turned off") && d.contains("project=47754236417"), "\(d)")
+        } else { Issue.record("got \(e)") }
+
+        let scope = #"googleapi: Error 403: Request had insufficient authentication scopes., insufficientPermissions"#
+        if case .authenticationFailed(let d) = ErrorClassifier.classify(output: [scope]) { #expect(d.contains("auth/drive")) } else { Issue.record("scope") }
+
+        let other = #"googleapi: Error 404: File not found: abc., notFound"#
+        if case .remoteUnavailable(let d) = ErrorClassifier.classify(output: [other]) { #expect(d.contains("File not found")) } else { Issue.record("other") }
+    }
+
     @Test func securityErrorsNeverAutoRetry() {
         #expect(!DriveError.hostKeyMismatch(host: "h").isRetryable)
         #expect(!DriveError.authenticationFailed("x").isRetryable)

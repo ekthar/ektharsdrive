@@ -14,6 +14,7 @@ public enum ErrorClassifier {
         if lower.contains("knownhosts: key is unknown") {
             return .hostKeyUnknown(host: hostName)
         }
+        if let google = googleAPIError(text) { return google }
         let authMarkers = ["invalid_grant", "token has been expired or revoked", "couldn't fetch token", "oauth2: cannot fetch token",
                            "token expired", "unable to authenticate", "no supported methods remain", "permission denied (publickey",
                            "ssh: handshake failed: ssh: unable to authenticate", "unauthorized_client", "invalid_client",
@@ -63,6 +64,37 @@ public enum ErrorClassifier {
             return .processExited(code: exitCode, detail: last)
         }
         return .unknown(lastMeaningfulLine(lines) ?? "No error output.")
+    }
+
+    /// Google API errors arrive as multi-line JSON (`"reason": "SERVICE_DISABLED"`, `"message": "..."`) or as
+    /// `googleapi: Error 403: <message>, <reason>`. Turn the common ones into a fix the user can act on.
+    static func googleAPIError(_ text: String) -> DriveError? {
+        func first(_ pattern: String) -> String? {
+            guard let re = try? NSRegularExpression(pattern: pattern),
+                  let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let r = Range(m.range(at: 1), in: text) else { return nil }
+            return String(text[r])
+        }
+        let reason = first(#""reason"\s*:\s*"([A-Za-z_]+)""#) ?? first(#"googleapi: Error \d+: [^\n]*?, ([A-Za-z]+)\b"#)
+        let message = first(#""message"\s*:\s*"([^"]+)""#) ?? first(#"googleapi: Error \d+: ([^\n]+)"#)
+        let project = first(#"project[s]?[ /=:]+(\d{6,})"#)
+        guard reason != nil || (message?.contains("googleapis") ?? false) || text.contains("googleapi: Error") else { return nil }
+        let enableLink = "https://console.cloud.google.com/apis/library/drive.googleapis.com" + (project.map { "?project=\($0)" } ?? "")
+        switch reason?.uppercased() ?? "" {
+        case "SERVICE_DISABLED", "ACCESSNOTCONFIGURED":
+            return .authenticationFailed("The Google Drive API is turned off for your Google Cloud project\(project.map { " (\($0))" } ?? ""). Open \(enableLink), click Enable, wait a minute, then sign in again.")
+        case "ACCESS_TOKEN_SCOPE_INSUFFICIENT", "INSUFFICIENTPERMISSIONS":
+            return .authenticationFailed("Google gave the app too little access. On your consent screen (Data Access), add the scope https://www.googleapis.com/auth/drive, then sign in again and allow every checkbox.")
+        case "RATELIMITEXCEEDED", "USERRATELIMITEXCEEDED", "RATE_LIMIT_EXCEEDED", "QUOTAEXCEEDED":
+            return .remoteUnavailable("Google is rate-limiting requests right now. Ekthar Drive retries automatically.")
+        case "STORAGEQUOTAEXCEEDED":
+            return .remoteUnavailable("Your Google storage is full. Free space in Google Drive to upload more.")
+        case "AUTHERROR", "UNAUTHENTICATED", "INVALIDCREDENTIALS":
+            return .authenticationFailed("Google rejected the sign-in. Reconnect your Google account.")
+        default:
+            guard let message else { return nil }
+            return .remoteUnavailable("Google said: \(Redactor.redact(message))\(reason.map { " (\($0))" } ?? "")")
+        }
     }
 
     private static func friendlyAuth(_ marker: String) -> String {
