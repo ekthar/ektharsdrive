@@ -1,0 +1,14 @@
+.build/
+.swiftpm/
+build/
+dist/
+*.xcodeproj/xcuserdata/
+DerivedData/
+*.log
+*.dmg
+# Never commit credentials or rclone config
+*.conf
+known_hosts
+*.pem
+id_*
+.env
