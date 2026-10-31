@@ -97,7 +97,7 @@ private struct DriveSettingsSection: View {
             Toggle("Enabled", isOn: Binding(get: { drive.enabled }, set: { v in var d = drive; d.enabled = v; save(d) }))
             LabeledContent("Mount location") {
                 HStack {
-                    TextField("Default", text: $customPath, prompt: Text(MountPathResolver.path(for: DriveConfiguration(id: drive.id, name: drive.name, provider: drive.provider, remoteName: drive.remoteName, remotePath: drive.remotePath, cache: drive.cache), engine: (try? drives.dependencies?.resolve(drives.settings.mountEngine)) ?? .nfs)))
+                    TextField("Default", text: $customPath, prompt: Text(MountPathResolver.path(for: DriveConfiguration(id: drive.id, name: drive.name, provider: drive.provider, remoteName: drive.remoteName, remotePath: drive.remotePath, cache: drive.cache), engine: drives.effectiveEngine ?? .nfs)))
                         .onSubmit(applyPath)
                     Button("Apply", action: applyPath)
                 }

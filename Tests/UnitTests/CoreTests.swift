@@ -72,7 +72,7 @@ import Testing
         #expect(value(a, "--vfs-cache-max-size") == "8G")
         #expect(value(a, "--vfs-cache-max-age") == "168h")
         #expect(value(a, "--buffer-size") == "32M")
-        #expect(value(a, "--dir-cache-time") == "5m")
+        #expect(value(a, "--dir-cache-time") == "1440m")
         #expect(value(a, "--poll-interval") == "1m")
         #expect(value(a, "--vfs-write-back") == "5s")
         #expect(value(a, "--vfs-cache-min-free-space") == "5G")
@@ -80,6 +80,15 @@ import Testing
         #expect(a.contains("--rc-no-auth"))
         #expect(a.contains("--noappledouble"))
         #expect(value(a, "--volname") == "Google Drive")
+    }
+
+    @Test func speedTuning() throws {
+        let g = try args(.googleDefault, .nfs)
+        #expect(value(g, "--vfs-read-chunk-size") == "8M")
+        #expect(value(g, "--vfs-read-chunk-size-limit") == "256M")
+        #expect(value(g, "--attr-timeout") == "5s")
+        #expect(value(g, "--dir-cache-time") == "1440m", "Google keeps listings; polling catches changes")
+        #expect(value(try args(.oracleDefault, .nfs), "--dir-cache-time") == "5m", "SFTP has no change feed")
     }
 
     @Test func fskitBackendOnlyForMacFUSE() throws {

@@ -65,6 +65,19 @@ public final class DriveManager {
     // MARK: Accessors
 
     public func drive(_ id: String) -> DriveConfiguration? { drives.first { $0.id == id } }
+
+    /// The engine a mount would really use now, including the NFS fallback after a macFUSE failure.
+    public var effectiveEngine: MountEngine? {
+        guard let deps = dependencies, let resolved = try? deps.resolve(settings.mountEngine) else { return nil }
+        return settings.mountEngine == .automatic && macFUSEUnusable && deps.nfsUsable ? .nfs : resolved
+    }
+
+    /// Where the drive is (or would be) mounted. Used by the UI so it never shows a path that will not be used.
+    public func mountLocation(_ id: String) -> String? {
+        guard let d = drive(id) else { return nil }
+        if let p = state(id).mountPath, state(id).phase.isActive { return p }
+        return MountPathResolver.path(for: d, engine: effectiveEngine ?? .nfs)
+    }
     public func state(_ id: String) -> DriveRuntime { runtime[id] ?? DriveRuntime() }
     public var allActiveTransfers: [Transfer] { activeTransfers.values.flatMap { $0 }.sorted { $0.startedAt > $1.startedAt } }
     public var googleDrive: DriveConfiguration? { drives.first { $0.provider == .googleDrive } }
@@ -141,6 +154,11 @@ public final class DriveManager {
         for d in [DriveConfiguration.googleDefault, .oracleDefault] where !list.contains(where: { $0.id == d.id }) {
             try? database.saveDrive(d)
             list.append(d)
+        }
+        // Upgrade drives saved with the old 5-minute folder cache: change polling keeps a long cache fresh.
+        for i in list.indices where list[i].provider.supportsChangePolling && list[i].cache.dirCacheMinutes == 5 {
+            list[i].cache.dirCacheMinutes = CachePolicy.googleDefault.dirCacheMinutes
+            try? database.saveDrive(list[i])
         }
         drives = list
         for d in list where runtime[d.id] == nil {

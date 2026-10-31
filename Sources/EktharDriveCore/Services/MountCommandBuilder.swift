@@ -65,6 +65,12 @@ public enum MountCommandBuilder {
             "--rc", "--rc-addr", "unix://" + rcSocket, "--rc-no-auth",
             "--use-json-log", "--log-level", globals.logLevel,
             "--stats", "0",
+            // Open fast: fetch the first 8 MB of a file, then double the chunk up to 256 MB while reading on.
+            // Finder previews and quick peeks then cost a few MB instead of 128 MB (rclone's default).
+            "--vfs-read-chunk-size", "8M",
+            "--vfs-read-chunk-size-limit", "256M",
+            // Re-use file attributes for a few seconds so Finder's many stat calls do not each hit the VFS.
+            "--attr-timeout", "5s",
         ]
         if drive.provider.supportsChangePolling { args += ["--poll-interval", "1m"] }
         if engine == .macFUSE {

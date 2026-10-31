@@ -58,7 +58,8 @@ public struct CachePolicy: Codable, Sendable, Equatable {
         self.dirCacheMinutes = dirCacheMinutes
     }
 
-    public static let googleDefault = CachePolicy(maxSizeBytes: 8 * .gibibyte, bufferSizeMB: 32)
+    /// Google reports changes every minute (`--poll-interval`), so folder listings can be kept a long time.
+    public static let googleDefault = CachePolicy(maxSizeBytes: 8 * .gibibyte, bufferSizeMB: 32, dirCacheMinutes: 1440)
     public static let oracleDefault = CachePolicy(maxSizeBytes: 4 * .gibibyte, bufferSizeMB: 16)
 }
 
