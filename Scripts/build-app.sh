@@ -65,7 +65,7 @@ PLIST
 
 echo "==> codesign ($SIGN_IDENTITY)"
 TIMESTAMP_FLAG="--timestamp=none"
-[ "$SIGN_IDENTITY" != "-" ] && TIMESTAMP_FLAG="--timestamp"
+[[ "$SIGN_IDENTITY" == Developer\ ID* ]] && TIMESTAMP_FLAG="--timestamp"
 codesign --force --options runtime $TIMESTAMP_FLAG --sign "$SIGN_IDENTITY" "$APP"
 codesign --verify --strict --verbose=1 "$APP"
 
