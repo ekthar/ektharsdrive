@@ -198,7 +198,12 @@ extension DriveError {
 }
 
 extension Date {
-    var relative: String { RelativeDateTimeFormatter().localizedString(for: self, relativeTo: Date()) }
+    var relative: String {
+        if abs(timeIntervalSinceNow) < 60 { return "just now" }
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .full
+        return f.localizedString(for: self, relativeTo: Date())
+    }
 }
 
 extension Transfer {
