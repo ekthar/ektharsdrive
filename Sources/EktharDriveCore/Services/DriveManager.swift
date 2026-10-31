@@ -535,7 +535,7 @@ public final class DriveManager {
     }
 
     /// Loads the top folder and each first-level folder into rclone's listing cache right after mounting,
-    /// so the first clicks in Finder do not wait for the cloud. Metadata only; no file contents. Max 60 folders.
+    /// so the first clicks in Finder do not wait for the cloud. Metadata only; no file contents. Max 20 folders.
     nonisolated static func prewarm(socket: String, mountPath: String) async {
         let rc = RcClient(socketPath: socket, timeoutSeconds: 60)
         _ = try? await rc.call("vfs/refresh", params: ["recursive": "false"])
@@ -544,12 +544,13 @@ public final class DriveManager {
         for name in top where !name.hasPrefix(".") {
             var isDir: ObjCBool = false
             if FileManager.default.fileExists(atPath: mountPath + "/" + name, isDirectory: &isDir), isDir.boolValue { dirs.append(name) }
-            if dirs.count >= 60 { break }
+            if dirs.count >= 20 { break }
         }
-        for chunk in stride(from: 0, to: dirs.count, by: 10) {
-            var params: [String: String] = ["recursive": "false"]
-            for (i, name) in dirs[chunk..<min(chunk + 10, dirs.count)].enumerated() { params[i == 0 ? "dir" : "dir\(i + 1)"] = name }
-            _ = try? await rc.call("vfs/refresh", params: params)
+        // One folder at a time with a pause, so warming never competes with what the user is opening
+        // (Google rate-limits API calls per account).
+        for name in dirs {
+            try? await Task.sleep(for: .milliseconds(500))
+            _ = try? await rc.call("vfs/refresh", params: ["dir": name, "recursive": "false"])
         }
     }
 
