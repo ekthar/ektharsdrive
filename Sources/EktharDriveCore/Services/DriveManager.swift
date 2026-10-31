@@ -53,6 +53,14 @@ public final class DriveManager {
     /// Set when rclone.conf could not be read at startup; auto-mount retries once this clears.
     public private(set) var configReadError: DriveError?
     @ObservationIgnored private var pollFailures: [String: Int] = [:]
+    @ObservationIgnored private var probeFailures: [String: Int] = [:]
+    @ObservationIgnored private var lastProbe: [String: Date] = [:]
+    @ObservationIgnored private let sleepGuard = UploadSleepGuard()
+    @ObservationIgnored private var lastDiskWarningLevel: DiskWarning.Level?
+    /// Watchdog: restart rclone after this many failed checks in a row (rc ~15 s apart, volume probes 30 s apart).
+    static let watchdogRestartAfter = 4
+    public private(set) var watchdogRestarts = 0
+    @ObservationIgnored private var watchdogStopping: Set<String> = []
     static let pollFailuresBeforeError = 3
     /// Set once macFUSE fails to mount in Automatic mode; later mounts this session go straight to NFS.
     @ObservationIgnored private var macFUSEUnusable = false
@@ -221,12 +229,19 @@ public final class DriveManager {
             guard await rc.isResponsive() else { continue }
             desiredMounted.insert(d.id)
             trackers[d.id] = TransferTracker(driveID: d.id, remoteName: d.remoteName, ignoreExistingHistory: true)
-            let engine = (try? dependencies?.resolve(settings.mountEngine)) ?? .nfs
+            // Use the mount that really exists. Guessing from settings picked the macFUSE path while the drive
+            // was mounted with NFS, so the eject check saw "no mount" and stopped a healthy drive.
+            let candidates: [(MountEngine, String)] = [.nfs, .macFUSE].map { ($0, MountPathResolver.path(for: d, engine: $0)) }
+            guard let (engine, path) = candidates.first(where: { MountTable.isMounted($0.1) }) else {
+                log(d.id, "mount", "Found \(d.name)'s rclone running but its volume is gone; stopping it.", .warning)
+                await supervisor.terminate(d.id)
+                continue
+            }
             update(d.id) {
                 $0.phase = .mounted
                 $0.pid = info.pid
                 $0.engine = engine
-                $0.mountPath = MountPathResolver.path(for: d, engine: engine)
+                $0.mountPath = path
             }
             log(d.id, "mount", "Reattached to \(d.name), which kept running while Ekthar Drive was closed.", .info)
         }
@@ -474,6 +489,17 @@ public final class DriveManager {
                 return classified
             }()
             update(id) { $0.pid = nil; $0.lastError = error }
+            let fromWatchdog = watchdogStopping.remove(id) != nil
+            if fromWatchdog {
+                CrashReporter.write(driveID: id, driveName: d.name, status: status, error: error, recentOutput: recent, logsDirectory: paths.logsDirectory)
+                update(id) { $0.retryAttempt = 0; $0.phase = .retrying(attempt: 1, at: Date()) }
+                Task {
+                    if let p = self.state(id).mountPath { await MountManager(paths: self.paths, supervisor: self.supervisor, rcloneURL: URL(fileURLWithPath: "/usr/bin/true")).removeStaleNFSMount(p) }
+                    try? await Task.sleep(for: .seconds(1))
+                    if let current = self.drive(id) { await self.performMount(current) }
+                }
+                return
+            }
             if status == 0, case .processExited = error {
                 // Ejected in Finder: respect it, do not remount.
                 desiredMounted.remove(id)
@@ -481,7 +507,9 @@ public final class DriveManager {
                 log(id, "mount", "\(d.name) was ejected.", .info)
                 return
             }
-            log(id, "process", "\(d.name) stopped unexpectedly: \(error.title).", .error)
+            let report = CrashReporter.write(driveID: id, driveName: d.name, status: status, error: error,
+                                             recentOutput: recent, logsDirectory: paths.logsDirectory)
+            log(id, "process", "\(d.name) stopped unexpectedly: \(error.title).\(report.map { " Report saved: \($0.lastPathComponent)" } ?? "")", .error)
             scheduleRetryOrFail(d, error)
         }
     }
@@ -505,6 +533,14 @@ public final class DriveManager {
         // Assign only on change: every write to observed state redraws every screen that reads it.
         let warning = cacheManager.diskWarning(minFreeBytes: settings.globals.minFreeSpaceBytes)
         if warning != diskWarning { diskWarning = warning }
+        if warning?.level != lastDiskWarningLevel {
+            lastDiskWarningLevel = warning?.level
+            if let w = warning {
+                let msg = "Only \(ByteFormat.string(w.freeBytes)) free on this Mac. The cache stops growing below \(ByteFormat.string(w.thresholdBytes)); files waiting to upload are kept."
+                log(nil, "disk", msg, w.level == .critical ? .error : .warning)
+                if settings.notificationsEnabled { notifier.notify(title: w.level == .critical ? "Mac disk almost full" : "Mac disk getting full", body: msg) }
+            }
+        }
         for id in await supervisor.checkAdopted() where desiredMounted.contains(id) {
             if let d = drive(id) { finishStopped(id); scheduleRetryOrFail(d, .processExited(code: -1, detail: "The reattached rclone process stopped.")) }
         }
@@ -561,13 +597,53 @@ public final class DriveManager {
                 // not a problem; only report it after 3 misses in a row (about 45 s or more).
                 let misses = (pollFailures[d.id] ?? 0) + 1
                 pollFailures[d.id] = misses
+                if misses >= Self.watchdogRestartAfter, state(d.id).phase == .mounted {
+                    watchdogRestart(d, reason: "its control channel stopped answering")
+                }
                 if misses >= Self.pollFailuresBeforeError {
                     update(d.id) { $0.lastError = .rcUnavailable("\(d.name) is not answering. Files may open slowly. Ekthar Drive keeps checking.") }
                 }
                 _ = e
             }
         }
+        let pendingTotal = drives.compactMap { state($0.id).cache?.pendingUploads }.reduce(0, +)
+        sleepGuard.update(pendingUploads: pendingTotal)
+        await probeVolumes()
         return busy
+    }
+
+    /// Watchdog part 2: the volume itself must answer a stat within 10 s (checked every 30 s).
+    private func probeVolumes() async {
+        for d in drives where state(d.id).phase == .mounted && !stopping.contains(d.id) {
+            guard let p = state(d.id).mountPath, lastProbe[d.id].map({ Date().timeIntervalSince($0) >= 30 }) ?? true else { continue }
+            lastProbe[d.id] = Date()
+            if await VolumeProbe.responds(p, within: 10) {
+                probeFailures[d.id] = 0
+            } else {
+                let n = (probeFailures[d.id] ?? 0) + 1
+                probeFailures[d.id] = n
+                log(d.id, "watchdog", "\(d.name) did not answer a file check within 10 s (\(n) of 2).", .warning)
+                if n >= 2 { probeFailures[d.id] = 0; watchdogRestart(d, reason: "the volume stopped answering") }
+            }
+        }
+    }
+
+    /// Restarts a hung rclone. Safe for data: files waiting to upload stay in the cache on disk and resume
+    /// when the new process starts. The normal exit handler removes the dead volume and remounts.
+    private func watchdogRestart(_ d: DriveConfiguration, reason: String) {
+        guard state(d.id).phase == .mounted else { return }
+        pollFailures[d.id] = 0
+        watchdogRestarts += 1
+        log(d.id, "watchdog", "Restarting \(d.name) because \(reason). Pending uploads are kept and resume after the restart.", .warning)
+        watchdogStopping.insert(d.id)
+        Task {
+            await supervisor.terminate(d.id)
+            // A hung rclone often ignores SIGTERM. Give it 15 s, then stop it hard.
+            if !(await supervisor.waitForExit(d.id, timeout: .seconds(15))) {
+                log(d.id, "watchdog", "\(d.name) did not stop; forcing it to quit.", .warning)
+                await supervisor.forceKill(d.id)
+            }
+        }
     }
 
     /// Loads the top folder and each first-level folder into rclone's listing cache right after mounting,

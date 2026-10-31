@@ -188,6 +188,13 @@ public actor ProcessSupervisor {
         }
     }
 
+    /// Last resort for a HUNG process only (used by the watchdog after SIGTERM was ignored). Files waiting
+    /// to upload are already on disk in the VFS cache and upload when the drive mounts again.
+    public func forceKill(_ driveID: String) {
+        if let h = handles[driveID], h.process.isRunning { kill(h.process.processIdentifier, SIGKILL) }
+        else if let a = adopted[driveID], Self.isAlive(a.pid) { kill(a.pid, SIGKILL) }
+    }
+
     /// Waits up to `timeout` for the drive's process to exit.
     public func waitForExit(_ driveID: String, timeout: Duration) async -> Bool {
         let deadline = ContinuousClock.now + timeout

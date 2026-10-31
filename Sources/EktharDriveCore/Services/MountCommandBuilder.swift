@@ -78,6 +78,11 @@ public enum MountCommandBuilder {
             "--vfs-read-chunk-streams", "4",
         ]
         if drive.provider.supportsChangePolling { args += ["--poll-interval", "1m"] }
+        if drive.provider == .googleDrive {
+            // Rate-limit guard: stay under Google's per-user API limit instead of hitting it and waiting
+            // through exponential back-off (we measured 17 s stalls on 403 "Quota exceeded").
+            args += ["--tpslimit", "10", "--tpslimit-burst", "20"]
+        }
         if engine == .nfs {
             // Keep NFS file handles on disk so Finder windows stay valid across rclone restarts
             // instead of showing "stale" errors.

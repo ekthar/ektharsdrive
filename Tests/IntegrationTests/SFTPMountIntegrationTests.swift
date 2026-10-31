@@ -306,6 +306,29 @@ struct SFTPMountIntegrationTests {
         }
     }
 
+    /// Freezes rclone (SIGSTOP) to simulate a hang. The watchdog must decide to restart it; once the process
+    /// can run again it exits, the dead volume is removed and a fresh rclone mounts the drive.
+    @Test func watchdogRestartsHungProcess() async throws {
+        try await withHarness(name: "wd") { h in
+            try await h.connect()
+            await h.manager.mount("oracle")
+            let pid = try #require(h.manager.state("oracle").pid)
+            kill(pid, SIGSTOP)
+            let before = h.manager.watchdogRestarts
+            for _ in 0..<(DriveManager.watchdogRestartAfter + 1) where h.manager.watchdogRestarts == before {
+                _ = await h.manager.pollOnce()
+            }
+            #expect(h.manager.watchdogRestarts == before + 1, "watchdog decided to restart")
+            kill(pid, SIGCONT)
+            #expect(await eventually(.seconds(90), poll: .seconds(1)) {
+                h.manager.state("oracle").phase == .mounted && h.manager.state("oracle").pid != pid
+            }, "remounted with a new process: \(h.manager.state("oracle"))")
+            #expect(MountTable.isMounted(h.mountPath))
+            let reports = (try? FileManager.default.contentsOfDirectory(atPath: h.paths.logsDirectory.path))?.filter { $0.hasPrefix("crash-") } ?? []
+            #expect(!reports.isEmpty, "crash report written")
+        }
+    }
+
     @Test func hostKeyMismatchIsRefusedAndNeverRetried() async throws {
         try await withHarness(name: "hk") { h in
             try await h.connect()
@@ -470,7 +493,10 @@ struct SFTPMountIntegrationTests {
             await m2.start()
             #expect(m2.state("oracle").phase == .mounted)
             #expect(m2.state("oracle").pid == pid)
-            let pending = await MountManager(paths: h.paths, supervisor: m2.supervisor, rcloneURL: URL(fileURLWithPath: rclonePath!)).pendingUploads("oracle")
+            #expect(m2.state("oracle").mountPath == h.mountPath, "reattached to the real mount path")
+        _ = await m2.pollOnce()
+        #expect(m2.state("oracle").phase == .mounted, "not mistaken for an eject after reattaching")
+        let pending = await MountManager(paths: h.paths, supervisor: m2.supervisor, rcloneURL: URL(fileURLWithPath: rclonePath!)).pendingUploads("oracle")
             #expect(pending == 0)
             await m2.unmount("oracle", waitForUploads: true)
             #expect(!MountTable.isMounted(h.mountPath))
