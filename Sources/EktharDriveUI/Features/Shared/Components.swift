@@ -26,6 +26,7 @@ extension ProviderKind {
         switch self {
         case .googleDrive: "externaldrive.badge.icloud"
         case .oracleSFTP: "server.rack"
+        case .vault: "lock.shield"
         }
     }
 }

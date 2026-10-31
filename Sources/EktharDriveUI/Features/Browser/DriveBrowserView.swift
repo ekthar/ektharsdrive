@@ -77,9 +77,11 @@ struct DriveBrowserView: View {
             .confirmationDialog(deleteTitle, isPresented: Binding(get: { !browser.deleteTargets.isEmpty }, set: { if !$0 { browser.deleteTargets = [] } })) {
                 Button("Delete", role: .destructive) { let urls = browser.deleteTargets; Task { await browser.delete(urls) } }
             } message: {
-                Text(d.provider == .googleDrive
-                     ? "Items go to the trash in your Google Drive, where you can restore them for 30 days."
-                     : "Items are permanently deleted from your Oracle server. This cannot be undone.")
+                switch d.provider {
+                case .googleDrive: Text("Items go to the trash in your Google Drive, where you can restore them for 30 days.")
+                case .vault: Text("Items go to your Google Drive trash, still encrypted, for 30 days. Restoring them there brings them back to the vault.")
+                case .oracleSFTP: Text("Items are permanently deleted from your Oracle server. This cannot be undone.")
+                }
             }
         }
     }
@@ -512,7 +514,7 @@ struct NotMountedView: View {
                         Button("Account…") { showConnect = true }.buttonStyle(.secondaryLarge)
                     } else {
                         Button { showConnect = true } label: {
-                            Label(drive.provider == .googleDrive ? "Connect Google Drive" : "Connect Oracle Server", systemImage: "link").frame(minWidth: 220)
+                            Label(drive.provider == .googleDrive ? "Connect Google Drive" : (drive.provider == .vault ? "Unlock Vault" : "Connect Oracle Server"), systemImage: drive.provider == .vault ? "lock.open" : "link").frame(minWidth: 220)
                         }
                         .buttonStyle(.primaryLarge)
                         .disabled(drives.dependencies?.rclone == nil)
@@ -534,7 +536,7 @@ struct NotMountedView: View {
         }
         .background(Theme.canvas)
         .sheet(isPresented: $showConnect) {
-            if drive.provider == .googleDrive { GoogleConnectSheet().environment(drives) } else { OracleConfigSheet().environment(drives) }
+            ConnectSheet(provider: drive.provider).environment(drives)
         }
         .task(id: drive.id) {
             if rt.usage == nil, rt.connection.isConfigured { await drives.refreshUsage(drive.id) }

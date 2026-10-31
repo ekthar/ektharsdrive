@@ -10,6 +10,7 @@ import ServiceManagement
 public final class AppModel {
     public let drives: DriveManager
     let loginItems = LoginItemController()
+    public let dropZone = DropZoneController()
     var selection: SidebarItem? = .dashboard
     var settingsTab: SettingsTab = .accounts
     var showSetup = false
@@ -66,6 +67,7 @@ public final class AppModel {
         }
         if !drives.settings.setupCompleted { showSetup = true }
         loginItems.refresh()
+        dropZone.start(drives: drives)
     }
 
     public func applyTheme() {

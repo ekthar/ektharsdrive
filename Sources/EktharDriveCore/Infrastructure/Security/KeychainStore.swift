@@ -6,6 +6,8 @@ public enum SecretKey: String, Sendable, CaseIterable {
     case rcloneConfigPassword = "rclone-config-password"
     case googleClientSecret = "google-client-secret"
     case oracleKeyPassphrase = "oracle-key-passphrase"
+    /// The vault password. Only in the Keychain: never in rclone.conf, never in arguments.
+    case vaultPassword = "vault-password"
 }
 
 public protocol SecretStore: Sendable {

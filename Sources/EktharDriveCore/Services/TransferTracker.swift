@@ -46,6 +46,9 @@ public struct TransferTracker: Sendable {
             t.speed = item.speed
             t.eta = item.eta
             t.status = .running
+            t.group = item.group ?? t.group
+            t.queueID = nil
+            t.startsIn = nil
             active[item.name] = t
         }
 
@@ -87,8 +90,15 @@ public struct TransferTracker: Sendable {
             var t = queued[q.name] ?? makeTransfer(name: q.name, src: "local cache", dst: remoteName + ":", size: q.size, now: now)
             t.direction = .upload
             t.totalBytes = q.size ?? t.totalBytes
-            t.status = (q.tries ?? 0) > 0 ? .waiting : .queued
-            if (q.tries ?? 0) > 0 { t.errorMessage = "Upload will retry (attempt \((q.tries ?? 0) + 1))." }
+            t.queueID = q.id
+            t.startsIn = q.expiry
+            if (q.expiry ?? 0) > UploadQueue.holdThreshold {
+                t.status = .paused
+                t.errorMessage = nil
+            } else {
+                t.status = (q.tries ?? 0) > 0 ? .waiting : .queued
+                t.errorMessage = (q.tries ?? 0) > 0 ? "Upload will retry (attempt \((q.tries ?? 0) + 1))." : nil
+            }
             queuedNow[q.name] = t
         }
         queued = queuedNow

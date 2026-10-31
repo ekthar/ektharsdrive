@@ -82,6 +82,9 @@ public enum MountCommandBuilder {
             // Rate-limit guard: stay under Google's per-user API limit instead of hitting it and waiting
             // through exponential back-off (we measured 17 s stalls on 403 "Quota exceeded").
             args += ["--tpslimit", "10", "--tpslimit-burst", "20"]
+        } else if drive.provider == .vault {
+            // The vault talks to the same Google account from its own process; share the budget.
+            args += ["--tpslimit", "5", "--tpslimit-burst", "10"]
         }
         if engine == .nfs {
             // Keep NFS file handles on disk so Finder windows stay valid across rclone restarts

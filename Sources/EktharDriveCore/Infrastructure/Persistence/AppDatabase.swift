@@ -120,6 +120,11 @@ public final class AppDatabase: @unchecked Sendable {
                   .real(d.createdAt.timeIntervalSince1970), .real(Date().timeIntervalSince1970)])
     }
 
+    /// Removes a drive's settings row. Its transfer and activity history is kept.
+    public func deleteDrive(_ id: String) throws {
+        try db.execute("DELETE FROM drives WHERE id=?", [.text(id)])
+    }
+
     public func setDriveStatus(_ id: String, _ status: String) throws {
         try db.execute("UPDATE drives SET status=?, updated_at=? WHERE id=?", [.text(status), .real(Date().timeIntervalSince1970), .text(id)])
     }

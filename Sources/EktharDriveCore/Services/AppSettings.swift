@@ -24,6 +24,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var showPreviews = true
     /// Read the start of a selected file in the background so it opens instantly.
     public var prefetchSelection = true
+    /// Show a drop panel under the menu bar while dragging files toward it.
+    public var menuBarDropZone = true
 
     public init() {}
 
@@ -46,6 +48,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
         bandwidthLimitMBps = try c.decodeIfPresent(Double.self, forKey: .bandwidthLimitMBps)
         showPreviews = try c.decodeIfPresent(Bool.self, forKey: .showPreviews) ?? d.showPreviews
         prefetchSelection = try c.decodeIfPresent(Bool.self, forKey: .prefetchSelection) ?? d.prefetchSelection
+        menuBarDropZone = try c.decodeIfPresent(Bool.self, forKey: .menuBarDropZone) ?? d.menuBarDropZone
     }
 }
 

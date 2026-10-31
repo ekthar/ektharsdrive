@@ -28,7 +28,7 @@ struct DriveInspector: View {
         }
         .background(Theme.surface)
         .sheet(isPresented: $showConnect) {
-            if drive.provider == .googleDrive { GoogleConnectSheet().environment(drives) } else { OracleConfigSheet().environment(drives) }
+            ConnectSheet(provider: drive.provider).environment(drives)
         }
         .confirmationDialog("Disconnect \(drive.name)?", isPresented: $confirmDisconnect) {
             Button("Disconnect", role: .destructive) {
@@ -106,6 +106,10 @@ struct DriveInspector: View {
             VStack(spacing: 8) {
                 if drive.provider == .googleDrive {
                     row("Account", rt.accountLabel ?? (rt.connection.isConfigured ? "Signed in" : "None"))
+                } else if drive.provider == .vault {
+                    row("Stored in", "Google Drive › \(VaultProvider.defaultFolder)")
+                    row("Encryption", "Names and contents")
+                    row("Space", "Shared with Google Drive")
                 } else {
                     row("Server", drives.sftpConnection.map { "\($0.username)@\($0.host)" } ?? "None")
                     row("Folder", drive.remotePath)

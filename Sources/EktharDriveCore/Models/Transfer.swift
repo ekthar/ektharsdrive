@@ -4,8 +4,8 @@ public enum TransferDirection: String, Sendable, Codable {
     case upload, download
 }
 
-/// Transfer states. rclone has no per-file pause, so `.paused` is never produced by the tracker;
-/// it exists so the persisted schema matches the product spec.
+/// Transfer states. `.paused` is an upload the user held in the queue (rclone keeps it in the cache
+/// and does not start it). A transfer that is already sending cannot be paused, only finished or cancelled.
 public enum TransferStatus: String, Sendable, Codable, CaseIterable {
     case queued, running, paused, waiting, completed, failed, cancelled
 
@@ -30,6 +30,18 @@ public struct Transfer: Sendable, Identifiable, Equatable, Codable {
     public var startedAt: Date
     public var completedAt: Date?
     public var errorMessage: String?
+    /// rclone's id for a file waiting in the upload queue (vfs/queue). Lets the user start or hold it.
+    public var queueID: Int64?
+    /// rclone stats group, e.g. "job/12" for a Copy to job. Lets the user cancel it.
+    public var group: String?
+    /// Seconds until a queued upload may start, as rclone reports it.
+    public var startsIn: Double?
+
+    /// The rc job id for transfers started by an async job (Copy to), or nil.
+    public var jobID: Int? {
+        guard let group, group.hasPrefix("job/") else { return nil }
+        return Int(group.dropFirst(4))
+    }
 
     public init(id: UUID = UUID(), driveID: String, name: String, sourcePath: String, destinationPath: String,
                 direction: TransferDirection, totalBytes: Int64?, transferredBytes: Int64 = 0, speed: Double? = nil,

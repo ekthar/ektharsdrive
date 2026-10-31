@@ -4,11 +4,14 @@ import Foundation
 public enum ProviderKind: String, Codable, Sendable, CaseIterable {
     case googleDrive = "google_drive"
     case oracleSFTP = "oracle_sftp"
+    /// Encrypted folder inside Google Drive (rclone `crypt`). Names and contents are encrypted on this Mac.
+    case vault = "vault"
 
     public var displayName: String {
         switch self {
         case .googleDrive: "Google Drive"
         case .oracleSFTP: "Oracle Drive"
+        case .vault: "Vault"
         }
     }
 
@@ -17,11 +20,12 @@ public enum ProviderKind: String, Codable, Sendable, CaseIterable {
         switch self {
         case .googleDrive: "drive"
         case .oracleSFTP: "sftp"
+        case .vault: "crypt"
         }
     }
 
-    /// Whether the backend supports change polling (`--poll-interval`).
-    public var supportsChangePolling: Bool { self == .googleDrive }
+    /// Whether the backend supports change polling (`--poll-interval`). crypt passes Google's changes through.
+    public var supportsChangePolling: Bool { self == .googleDrive || self == .vault }
 }
 
 /// Which kernel/filesystem path is used to expose the volume to Finder.
@@ -105,6 +109,11 @@ public struct DriveConfiguration: Codable, Sendable, Equatable, Identifiable {
     public static let googleDefault = DriveConfiguration(
         id: "google", name: "Google Drive", provider: .googleDrive, remoteName: "gdrive", remotePath: "",
         cache: .googleDefault)
+
+    /// Created only when the user sets up a vault; never added automatically.
+    public static let vaultDefault = DriveConfiguration(
+        id: "vault", name: "Vault", provider: .vault, remoteName: "vault", remotePath: "",
+        cache: CachePolicy(maxSizeBytes: 4 * .gibibyte, bufferSizeMB: 16, dirCacheMinutes: 1440))
 
     public static let oracleDefault = DriveConfiguration(
         id: "oracle", name: "Oracle Drive", provider: .oracleSFTP, remoteName: "oracle",

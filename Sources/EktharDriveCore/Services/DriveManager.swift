@@ -31,6 +31,9 @@ public final class DriveManager {
     @ObservationIgnored private var pinTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var lastPinSync: [String: Date] = [:]
     static let pinsKey = "offline.pins"
+    /// Uploads the user paused, by drive, by path. Kept across remounts and app restarts.
+    public private(set) var heldUploads: [String: Set<String>] = [:]
+    static let heldUploadsKey = "uploads.held"
     /// Saved searches shown in the sidebar.
     public private(set) var smartFolders: [SmartFolder] = []
     static let smartFoldersKey = "smart.folders"
@@ -103,6 +106,7 @@ public final class DriveManager {
     public var allActiveTransfers: [Transfer] { activeTransfers.values.flatMap { $0 }.sorted { $0.startedAt > $1.startedAt } }
     public var googleDrive: DriveConfiguration? { drives.first { $0.provider == .googleDrive } }
     public var oracleDrive: DriveConfiguration? { drives.first { $0.provider == .oracleSFTP } }
+    public var vaultDrive: DriveConfiguration? { drives.first { $0.provider == .vault } }
 
     public var overallHealth: HealthLevel {
         let levels = drives.filter(\.enabled).map { state($0.id).health }
@@ -121,6 +125,13 @@ public final class DriveManager {
     func google() -> GoogleDriveProvider? {
         guard let rclone = rcloneService, let d = googleDrive else { return nil }
         return GoogleDriveProvider(rclone: rclone, remoteName: d.remoteName)
+    }
+
+    func vault() -> VaultProvider? {
+        guard let rclone = rcloneService, let g = googleDrive else { return nil }
+        let base = (try? google()?.runtimeEnvironment()) ?? [:]
+        return VaultProvider(rclone: rclone, remoteName: vaultDrive?.remoteName ?? DriveConfiguration.vaultDefault.remoteName,
+                             baseRemote: g.remoteName, baseEnvironment: base ?? [:])
     }
 
     func oracle() -> OracleSFTPProvider? {
@@ -146,6 +157,7 @@ public final class DriveManager {
         offlinePins = Prefetcher.decodePins(database.setting(Self.pinsKey))
         for p in offlinePins { pinStatus[p.id] = .waiting }
         smartFolders = SmartFolder.decode(database.setting(Self.smartFoldersKey))
+        heldUploads = UploadQueue.decodeHeld(database.setting(Self.heldUploadsKey))
         try? database.markStaleTransfersInterrupted()
         transferHistory = (try? database.recentTransfers()) ?? []
         recentActivity = (try? database.activity(limit: 300)) ?? []
@@ -314,6 +326,9 @@ public final class DriveManager {
                     throw DriveError.hostKeyUnknown(host: c.host)
                 }
                 extra = try await oracle()?.runtimeEnvironment() ?? [:]
+            case .vault:
+                guard let v = vault() else { throw DriveError.notConfigured }
+                extra = try await v.runtimeEnvironment()
             }
             var engine = (settings.mountEngine == .automatic && macFUSEUnusable && deps.nfsUsable) ? .nfs : resolved
             let manager = MountManager(paths: paths, supervisor: supervisor, rcloneURL: rclone.binary.url)
@@ -400,6 +415,8 @@ public final class DriveManager {
         pinTasks[id]?.cancel()
         pinTasks[id] = nil
         let rt = state(id)
+        // "Wait for uploads" means the user wants them sent, so paused ones must start, or the wait never ends.
+        if waitForUploads, rt.phase.isActive, !(heldUploads[id] ?? []).isEmpty { await resumeAllUploads(id) }
         let processRunning = await supervisor.isRunning(id)
         guard rt.phase.isActive || rt.phase == .mounting || processRunning else {
             desiredMounted.remove(id)
@@ -587,7 +604,11 @@ public final class DriveManager {
                 cache.bytesUsed = max(cache.bytesUsed, diskMeasure[d.id]?.bytes ?? 0)
                 let stats = try await rc.coreStats()
                 let done = (try? await rc.transferred())?.transferred ?? []
-                let queue = (try? await rc.vfsQueue())?.queue ?? []
+                var queue = (try? await rc.vfsQueue())?.queue ?? []
+                // Re-apply pauses rclone forgot (it re-queues cached files with a fresh start time on mount).
+                let rehold = UploadQueue.needsHold(queue, held: heldUploads[d.id] ?? [])
+                for item in rehold { try? await UploadQueue.hold(rc, id: item.id!) }
+                if !rehold.isEmpty { queue = (try? await rc.vfsQueue())?.queue ?? queue }
                 var tracker = trackers[d.id] ?? TransferTracker(driveID: d.id, remoteName: d.remoteName)
                 let result = tracker.update(transferring: stats.transferring ?? [], completed: done, queue: queue)
                 trackers[d.id] = tracker
@@ -704,6 +725,9 @@ public final class DriveManager {
             case .oracleSFTP:
                 guard let o = oracle(), let c = sftpConnection else { return }
                 usage = try await o.usage(remotePath: d.remotePath, host: c.host)
+            case .vault:
+                guard let v = vault() else { return }
+                usage = try await v.usage()
             }
             update(id) { $0.usage = usage; $0.connection = .connected(at: Date()); $0.lastSuccessfulConnection = Date() }
         } catch let error {
@@ -725,6 +749,76 @@ public final class DriveManager {
         guard let d = drive(id), state(id).phase.isActive else { return nil }
         return CloudActions(rc: RcClient(socketPath: paths.rcSocket(for: id).path, timeoutSeconds: 60), drive: d)
     }
+
+    // MARK: Upload queue
+
+    private func queueRC(_ id: String) -> RcClient? {
+        state(id).phase.isActive ? RcClient(socketPath: paths.rcSocket(for: id).path, timeoutSeconds: 15) : nil
+    }
+
+    private func saveHeld() { try? database.setSetting(Self.heldUploadsKey, UploadQueue.encodeHeld(heldUploads)) }
+
+    /// Starts a queued upload now, skipping the write-back delay and any pause.
+    public func uploadNow(_ t: Transfer) async {
+        guard let rc = queueRC(t.driveID), let qid = t.queueID else { return }
+        heldUploads[t.driveID]?.remove(Self.queueName(t))
+        saveHeld()
+        do { try await UploadQueue.startNow(rc, id: qid) } catch { log(t.driveID, "transfer", "Could not start \(t.name): \(error.detail)", .warning) }
+        _ = await pollOnce()
+    }
+
+    /// Keeps a queued upload on this Mac until resumed. The file stays safe in the cache.
+    public func pauseUpload(_ t: Transfer) async {
+        guard let rc = queueRC(t.driveID), let qid = t.queueID else { return }
+        heldUploads[t.driveID, default: []].insert(Self.queueName(t))
+        saveHeld()
+        do { try await UploadQueue.hold(rc, id: qid) } catch { log(t.driveID, "transfer", "Could not pause \(t.name): \(error.detail)", .warning) }
+        _ = await pollOnce()
+    }
+
+    public func resumeUpload(_ t: Transfer) async {
+        guard let rc = queueRC(t.driveID), let qid = t.queueID else { return }
+        heldUploads[t.driveID]?.remove(Self.queueName(t))
+        saveHeld()
+        do { try await UploadQueue.release(rc, id: qid) } catch { log(t.driveID, "transfer", "Could not resume \(t.name): \(error.detail)", .warning) }
+        _ = await pollOnce()
+    }
+
+    /// Pauses every upload still waiting on this drive. Ones already sending finish.
+    public func pauseAllUploads(_ id: String) async {
+        guard let rc = queueRC(id), let items = try? await UploadQueue.items(rc) else { return }
+        let waiting = items.filter { $0.uploading != true && $0.id != nil }
+        heldUploads[id, default: []].formUnion(waiting.map(\.name))
+        saveHeld()
+        for item in waiting { try? await UploadQueue.hold(rc, id: item.id!) }
+        if !waiting.isEmpty { log(id, "transfer", "Paused \(waiting.count) upload\(waiting.count == 1 ? "" : "s"). They stay on this Mac until resumed.", .info) }
+        _ = await pollOnce()
+    }
+
+    public func resumeAllUploads(_ id: String) async {
+        let held = heldUploads[id] ?? []
+        heldUploads[id] = nil
+        saveHeld()
+        guard let rc = queueRC(id), let items = try? await UploadQueue.items(rc) else { return }
+        for item in items where held.contains(item.name) && item.id != nil { try? await UploadQueue.release(rc, id: item.id!) }
+        if !held.isEmpty { log(id, "transfer", "Resumed paused uploads.", .info) }
+        _ = await pollOnce()
+    }
+
+    /// Stops a Copy to job. Already copied files stay where they are.
+    public func cancelJob(_ t: Transfer) async {
+        guard let rc = queueRC(t.driveID), let job = t.jobID else { return }
+        do {
+            try await UploadQueue.cancelJob(rc, jobID: job)
+            log(t.driveID, "transfer", "Cancelled copying \(t.name).", .info)
+        } catch { log(t.driveID, "transfer", "Could not cancel \(t.name): \(error.detail)", .warning) }
+        _ = await pollOnce()
+    }
+
+    public func hasHeldUploads(_ id: String) -> Bool { !(heldUploads[id] ?? []).isEmpty }
+
+    /// The queue's own name for an upload: its path inside the drive (the tracker stores it as the source).
+    static func queueName(_ t: Transfer) -> String { t.sourcePath }
 
     /// Drive-wide search through the running rclone. Nil when the drive is not mounted.
     public func search(_ id: String) -> DriveSearch? {
@@ -832,7 +926,9 @@ public final class DriveManager {
 
     /// Other drives a file can be copied to directly (configured in the same rclone.conf).
     public func copyTargets(from id: String) -> [DriveConfiguration] {
-        drives.filter { $0.id != id && state($0.id).connection.isConfigured }
+        // Not into the vault: the copy runs in the source drive's rclone, which never gets the vault password.
+        // Dragging into the Vault volume in Finder encrypts on the way in.
+        drives.filter { $0.id != id && state($0.id).connection.isConfigured && $0.provider != .vault }
     }
 
     /// Applies the saved speed limit to every running drive.
@@ -960,6 +1056,45 @@ public final class DriveManager {
         }
     }
 
+    // MARK: Vault
+
+    /// Creates the vault (or reconnects to an existing one with its password) and adds it as a drive.
+    public func setUpVault(password: String) async throws(DriveError) {
+        guard let g = googleDrive, state(g.id).connection.isConfigured else {
+            throw .invalidConfiguration("Connect Google Drive first. The vault is a folder inside it.")
+        }
+        guard let v = vault() else { throw .dependencyMissing(.rclone, detail: "Install rclone first.") }
+        if let d = vaultDrive, state(d.id).phase.isActive { throw .alreadyRunning }
+        let d = vaultDrive ?? .vaultDefault
+        try saveDrive(d)
+        if runtime[d.id] == nil {
+            runtime[d.id] = DriveRuntime()
+            trackers[d.id] = TransferTracker(driveID: d.id, remoteName: d.remoteName)
+        }
+        update(d.id) { $0.connection = .testing }
+        do {
+            try await v.configure(password: password)
+            update(d.id) { $0.connection = .connected(at: Date()); $0.lastError = nil; $0.lastSuccessfulConnection = Date(); $0.accountLabel = "Encrypted in “\(v.folder)”" }
+            log(d.id, "account", "Vault ready in Google Drive folder “\(v.folder)”.", .info)
+        } catch {
+            update(d.id) { $0.connection = .failed(error); $0.lastError = error }
+            log(d.id, "account", "Vault setup failed: \(error.title). \(error.detail)", .error)
+            throw error
+        }
+    }
+
+    public var vaultHasSavedPassword: Bool { vault()?.hasSavedPassword() ?? false }
+
+    /// Ejects the vault and forgets its password on this Mac. Opening it again needs the password.
+    public func lockVault() async {
+        guard let d = vaultDrive else { return }
+        if state(d.id).phase.isActive { await unmount(d.id, waitForUploads: true) }
+        guard !state(d.id).phase.isActive else { return }
+        do { try vault()?.lock(); log(d.id, "account", "Vault locked. Its password was removed from this Mac.", .info) }
+        catch { log(d.id, "account", "Could not forget the vault password: \(error.detail)", .error) }
+        update(d.id) { $0.connection = .unverified }
+    }
+
     public func testConnection(_ id: String) async {
         guard let d = drive(id) else { return }
         update(id) { $0.connection = .testing }
@@ -974,6 +1109,10 @@ public final class DriveManager {
                 guard let o = oracle(), let c = sftpConnection else { throw DriveError.notConfigured }
                 try await o.testConnection(remotePath: d.remotePath, host: c.host)
                 update(id) { $0.accountLabel = "\(c.username)@\(c.host)" }
+            case .vault:
+                guard let v = vault() else { throw DriveError.notConfigured }
+                try await v.testConnection()
+                update(id) { $0.accountLabel = "Encrypted in “\(v.folder)”" }
             }
             update(id) { $0.connection = .connected(at: Date()); $0.lastSuccessfulConnection = Date(); if $0.lastError?.category == .authentication { $0.lastError = nil } }
             log(id, "connection", "\(d.name) connection test succeeded.", .info)
@@ -998,6 +1137,13 @@ public final class DriveManager {
             try? database.deleteSFTP(driveID: id)
             sftpConnection = nil
             log(id, "account", "Oracle Drive disconnected and its trusted host key removed.", .info)
+        case .vault:
+            try await vault()?.disconnect()
+            drives.removeAll { $0.id == id }
+            try? database.deleteDrive(id)
+            log(id, "account", "Vault removed from this Mac. The encrypted files stay in Google Drive; the same password opens them again.", .info)
+            runtime[id] = nil
+            return
         }
         update(id) { $0 = DriveRuntime(); $0.cache = self.cacheManager.diskStats(id) }
     }

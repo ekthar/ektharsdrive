@@ -21,6 +21,10 @@ struct AccountsView: View {
                         LabeledContent("Account", value: rt.accountLabel ?? (rt.connection.isConfigured ? "Signed in" : "None"))
                         LabeledContent("OAuth client", value: drives.settings.googleClientID ?? "rclone shared client")
                         LabeledContent("Token storage", value: "Encrypted rclone.conf, key in Keychain")
+                    } else if d.provider == .vault {
+                        LabeledContent("Folder in Google Drive", value: VaultProvider.defaultFolder)
+                        LabeledContent("Encryption", value: "Names and contents, on this Mac")
+                        LabeledContent("Password", value: drives.vaultHasSavedPassword ? "Saved in Keychain" : "Locked (not saved)")
                     } else {
                         LabeledContent("Server", value: drives.sftpConnection.map { "\($0.username)@\($0.host):\($0.port)" } ?? "None")
                         LabeledContent("Private key", value: drives.sftpConnection?.privateKeyPath ?? "None")
@@ -30,19 +34,43 @@ struct AccountsView: View {
                     }
                     HStack {
                         Spacer()
-                        Button(rt.connection.isConfigured ? (d.provider == .googleDrive ? "Reconnect…" : "Reconfigure…") : "Connect…") { sheet = d.provider }
-                            .disabled(rt.phase.isActive)
-                        Button("Disconnect…", role: .destructive) { confirm = d }
-                            .disabled(!rt.connection.isConfigured || rt.phase.isActive)
+                        if d.provider == .vault {
+                            if drives.vaultHasSavedPassword {
+                                Button("Lock Vault") { Task { await drives.lockVault() } }
+                                    .help("Eject the vault and forget its password on this Mac")
+                            } else {
+                                Button("Unlock…") { sheet = .vault }.disabled(rt.phase.isActive)
+                            }
+                        } else {
+                            Button(rt.connection.isConfigured ? (d.provider == .googleDrive ? "Reconnect…" : "Reconfigure…") : "Connect…") { sheet = d.provider }
+                                .disabled(rt.phase.isActive)
+                        }
+                        Button(d.provider == .vault ? "Remove…" : "Disconnect…", role: .destructive) { confirm = d }
+                            .disabled((!rt.connection.isConfigured && d.provider != .vault) || rt.phase.isActive)
                     }
                     if rt.phase.isActive { Text("Unmount \(d.name) to change its account.").font(.caption).foregroundStyle(.secondary) }
+                }
+            }
+            if drives.vaultDrive == nil {
+                Section("Vault") {
+                    Text("An encrypted folder inside your Google Drive, shown as its own Finder volume. Files are encrypted on this Mac before upload, so Google sees only scrambled names and data.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Spacer()
+                        Button("Set Up Vault…") { sheet = .vault }
+                            .disabled(!(drives.googleDrive.map { drives.state($0.id).connection.isConfigured } ?? false))
+                    }
                 }
             }
         }
         .formStyle(.grouped)
         .navigationTitle("Accounts")
         .sheet(item: $sheet) { kind in
-            if kind == .googleDrive { GoogleConnectSheet().environment(drives) } else { OracleConfigSheet().environment(drives) }
+            switch kind {
+            case .googleDrive: GoogleConnectSheet().environment(drives)
+            case .oracleSFTP: OracleConfigSheet().environment(drives)
+            case .vault: VaultSetupSheet(existing: drives.vaultDrive != nil).environment(drives)
+            }
         }
         .confirmationDialog("Disconnect \(confirm?.name ?? "")?", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }), presenting: confirm) { d in
             Button("Disconnect and Remove Credentials", role: .destructive) {
@@ -51,7 +79,11 @@ struct AccountsView: View {
                     fingerprints = await drives.trustedOracleFingerprints()
                 }
             }
-        } message: { _ in Text("Credentials and trusted keys are removed from this Mac. No files are deleted anywhere.") }
+        } message: { d in
+            Text(d.provider == .vault
+                 ? "The vault and its saved password are removed from this Mac. The encrypted files stay in Google Drive, and the same password opens them again."
+                 : "Credentials and trusted keys are removed from this Mac. No files are deleted anywhere.")
+        }
         .task(id: drives.sftpConnection?.host) { fingerprints = await drives.trustedOracleFingerprints() }
     }
 }
@@ -84,6 +116,8 @@ struct GeneralSettingsView: View {
                 Text("Applies to uploads and downloads on every drive right away.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Show previews of images, PDFs and videos", isOn: Binding(
                     get: { drives.settings.showPreviews }, set: { v in model.updateSettings { $0.showPreviews = v } }))
+                Toggle("Show a drop zone when dragging files to the menu bar", isOn: Binding(
+                    get: { drives.settings.menuBarDropZone }, set: { v in model.updateSettings { $0.menuBarDropZone = v } }))
                 Toggle("Read ahead the selected file", isOn: Binding(
                     get: { drives.settings.prefetchSelection }, set: { v in model.updateSettings { $0.prefetchSelection = v } }))
                 Text("Previews read part of each file shown in icon view. Read-ahead loads the first 2 MB of a selected file so it opens at once.")

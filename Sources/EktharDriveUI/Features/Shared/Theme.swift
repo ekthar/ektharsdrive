@@ -277,6 +277,7 @@ extension ProviderKind {
         switch self {
         case .googleDrive: Color(red: 0.102, green: 0.451, blue: 0.910) // Google blue
         case .oracleSFTP: Color(red: 0.780, green: 0.275, blue: 0.204)  // Oracle red
+        case .vault: Color(red: 0.204, green: 0.212, blue: 0.341)       // deep slate
         }
     }
 }
