@@ -9,11 +9,14 @@ public struct TransferTracker: Sendable {
     public private(set) var active: [String: Transfer] = [:]
     private var queued: [String: Transfer] = [:]
     private var consumed: Set<String> = []
-    private var seeded = false
+    private var seeded: Bool
 
-    public init(driveID: String, remoteName: String) {
+    /// `ignoreExistingHistory` is for reattaching to a process that ran before we observed it; a freshly
+    /// launched process has no earlier history, so everything it reports is ours.
+    public init(driveID: String, remoteName: String, ignoreExistingHistory: Bool = false) {
         self.driveID = driveID
         self.remoteName = remoteName
+        self.seeded = !ignoreExistingHistory
     }
 
     public struct Update: Sendable {
@@ -100,7 +103,6 @@ public struct TransferTracker: Sendable {
         let open = Array(active.values)
         active.removeAll()
         queued.removeAll()
-        seeded = false
         return open.map { t in
             var t = t
             t.status = .failed

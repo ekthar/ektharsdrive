@@ -161,7 +161,7 @@ public actor ProcessSupervisor {
 
     /// Finds rclone processes recorded in PID files from a previous app run. Live ones whose command line
     /// still matches this drive are adopted (their mounts keep working); stale PID files are removed.
-    public func adoptOrphans(driveIDs: [String], runner: ProcessRunning = ProcessRunner()) async -> [SupervisedProcessInfo] {
+    public func adoptOrphans(driveIDs: [String]) async -> [SupervisedProcessInfo] {
         var found: [SupervisedProcessInfo] = []
         for id in driveIDs where handles[id] == nil {
             let pidFile = paths.pidFile(for: id)
@@ -171,10 +171,9 @@ public actor ProcessSupervisor {
                 try? FileManager.default.removeItem(at: pidFile)
                 continue
             }
-            let result = try? await runner.run(URL(fileURLWithPath: "/bin/ps"), arguments: ["-o", "command=", "-p", String(pid)],
-                                               timeout: .seconds(5))
-            let command = result?.stdout ?? ""
-            if command.contains("rclone"), command.contains(paths.rcSocket(for: id).path) {
+            let argv = Self.arguments(of: pid) ?? []
+            let isRclone = argv.first.map { ($0 as NSString).lastPathComponent == "rclone" } ?? false
+            if isRclone, argv.contains("unix://" + paths.rcSocket(for: id).path) {
                 let info = SupervisedProcessInfo(driveID: id, pid: pid, startedAt: Date(), adopted: true)
                 adopted[id] = info
                 found.append(info)
@@ -195,6 +194,28 @@ public actor ProcessSupervisor {
             gone.append(id)
         }
         return gone
+    }
+
+    /// argv of a process owned by this user, read from the kernel (KERN_PROCARGS2). No `ps`, no truncation.
+    public static func arguments(of pid: Int32) -> [String]? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return nil }
+        let argc = buffer.withUnsafeBytes { $0.load(as: Int32.self) }
+        var index = MemoryLayout<Int32>.size
+        // skip exec path, then NUL padding
+        while index < size, buffer[index] != 0 { index += 1 }
+        while index < size, buffer[index] == 0 { index += 1 }
+        var args: [String] = []
+        while args.count < argc, index < size {
+            let start = index
+            while index < size, buffer[index] != 0 { index += 1 }
+            args.append(String(decoding: buffer[start..<index], as: UTF8.self))
+            index += 1
+        }
+        return args
     }
 
     public static func isAlive(_ pid: Int32) -> Bool {

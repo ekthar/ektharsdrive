@@ -44,6 +44,9 @@ public final class DriveManager {
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var lastUsageRefresh: [String: Date] = [:]
+    /// rclone recomputes `bytesUsed` only on its cache-poll interval (1 min), so it lags behind writes.
+    /// We also measure the cache directory on disk, at most every 30 s, and show the larger real value.
+    @ObservationIgnored private var diskMeasure: [String: (bytes: Int64, at: Date)] = [:]
     @ObservationIgnored private var lastLoggedError: [String: (String, Date)] = [:]
     @ObservationIgnored private var started = false
 
@@ -170,6 +173,7 @@ public final class DriveManager {
             let rc = RcClient(socketPath: paths.rcSocket(for: d.id).path)
             guard await rc.isResponsive() else { continue }
             desiredMounted.insert(d.id)
+            trackers[d.id] = TransferTracker(driveID: d.id, remoteName: d.remoteName, ignoreExistingHistory: true)
             let engine = (try? dependencies?.resolve(settings.mountEngine)) ?? .nfs
             update(d.id) {
                 $0.phase = .mounted
@@ -436,7 +440,13 @@ public final class DriveManager {
         for d in drives where state(d.id).phase.isActive {
             let rc = RcClient(socketPath: paths.rcSocket(for: d.id).path, timeoutSeconds: 5)
             do {
-                let cache = try await cacheManager.liveStats(rc)
+                var cache = try await cacheManager.liveStats(rc)
+                if diskMeasure[d.id].map({ Date().timeIntervalSince($0.at) > 30 }) ?? true {
+                    let dir = cacheManager.cacheDirectory(d.id).appendingPathComponent("vfs")
+                    let bytes = await Task.detached(priority: .utility) { DirectoryMeasure.measure(dir).bytes }.value
+                    diskMeasure[d.id] = (bytes, Date())
+                }
+                cache.bytesUsed = max(cache.bytesUsed, diskMeasure[d.id]?.bytes ?? 0)
                 let stats = try await rc.coreStats()
                 let done = (try? await rc.transferred())?.transferred ?? []
                 let queue = (try? await rc.vfsQueue())?.queue ?? []

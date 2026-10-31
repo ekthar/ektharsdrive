@@ -151,7 +151,7 @@ func makeTempDir(_ name: String = "t") throws -> URL {
     }
 
     @Test func tracksLifecycleFromRcloneData() {
-        var t = TransferTracker(driveID: "oracle", remoteName: "oracle")
+        var t = TransferTracker(driveID: "oracle", remoteName: "oracle", ignoreExistingHistory: true)
         let old = RcCompletedTransfer(name: "old.txt", size: 1, bytes: 1, error: nil, checked: false, startedAt: "2026-10-30T10:00:00Z", completedAt: "2026-10-30T10:00:01Z")
         var u = t.update(transferring: [], completed: [old], queue: [])
         #expect(u.active.isEmpty && u.finished.isEmpty, "history from before observation is ignored")
@@ -186,6 +186,13 @@ func makeTempDir(_ name: String = "t") throws -> URL {
         let f = u.finished.first { $0.name == "x.zip" }!
         #expect(f.status == .failed && f.direction == .upload && !(f.errorMessage ?? "").contains("ya29.SECRET"))
         #expect(u.finished.first { $0.name == "dl.pdf" }?.direction == .download)
+    }
+
+    @Test func freshProcessKeepsTransfersThatFinishedBeforeFirstPoll() {
+        var t = TransferTracker(driveID: "o", remoteName: "oracle")
+        let done = RcCompletedTransfer(name: "fast.bin", size: 9, bytes: 9, error: nil, checked: false, startedAt: nil, completedAt: "2026-10-31T00:00:00Z", dstFs: "oracle:")
+        let u = t.update(transferring: [], completed: [done], queue: [])
+        #expect(u.finished.map(\.name) == ["fast.bin"])
     }
 
     @Test func stopMarksOpenTransfersFailed() {
