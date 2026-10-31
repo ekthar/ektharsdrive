@@ -366,8 +366,9 @@ public final class DriveManager {
             lastUsageRefresh[id] = nil
             Task { await self.refreshUsage(id) }
             if let limit = settings.bandwidthLimitMBps, limit > 0 { try? await cloudActions(id)?.setBandwidth(megabytesPerSecond: limit) }
-            Task.detached(priority: .utility) { [paths] in await Self.prewarm(socket: paths.rcSocket(for: id).path, mountPath: mountPath) }
+            Task.detached(priority: .utility) { [paths, mountPath] in await Self.prewarm(socket: paths.rcSocket(for: id).path, mountPath: mountPath) }
             lastPinSync[id] = nil // the poll loop starts offline folders shortly after mounting
+            if TimeMachineDisk.exists(mountPath: mountPath) { await openTimeMachineDisk(id) }
         } catch let error as DriveError {
             mountFailed(d, error)
         } catch {
@@ -427,6 +428,14 @@ public final class DriveManager {
         guard let rclone = rcloneService else { return }
         let manager = MountManager(paths: paths, supervisor: supervisor, rcloneURL: rclone.binary.url)
         let mountPath = rt.mountPath ?? MountPathResolver.path(for: d, engine: rt.engine ?? .nfs)
+        // The Time Machine disk lives on this drive; close it first or the volume stays busy.
+        if rt.phase.isActive, TimeMachineDisk.attachedVolume != nil, TimeMachineDisk.exists(mountPath: mountPath) {
+            do { try await TimeMachineDisk.detach() } catch {
+                update(id) { $0.lastError = error }
+                log(id, "timemachine", "Did not eject \(d.name): the Time Machine disk is in use. Let the backup finish, then eject again.", .warning)
+                return
+            }
+        }
         stopping.insert(id)
         update(id) { $0.phase = waitForUploads ? .unmounting : .unmounting }
         do {
@@ -748,6 +757,45 @@ public final class DriveManager {
     public func cloudActions(_ id: String) -> CloudActions? {
         guard let d = drive(id), state(id).phase.isActive else { return nil }
         return CloudActions(rc: RcClient(socketPath: paths.rcSocket(for: id).path, timeoutSeconds: 60), drive: d)
+    }
+
+    // MARK: Time Machine
+
+    /// Drive holding the Time Machine disk, if any is mounted.
+    public var timeMachineDriveID: String? {
+        drives.first { d in state(d.id).phase.isActive && state(d.id).mountPath.map(TimeMachineDisk.exists) == true }?.id
+    }
+
+    public private(set) var timeMachineBusy: String?
+
+    /// Creates the backup disk on a mounted drive, then opens it.
+    public func createTimeMachineDisk(_ id: String, sizeGB: Int) async throws(DriveError) {
+        guard let d = drive(id), state(id).phase == .mounted, let mount = state(id).mountPath else {
+            throw .invalidConfiguration("Mount the drive first.")
+        }
+        guard d.provider != .vault else { throw .invalidConfiguration("Use Google Drive or Oracle Drive. Time Machine can encrypt the backup itself.") }
+        guard timeMachineDriveID == nil else { throw .invalidConfiguration("A Time Machine disk already exists.") }
+        timeMachineBusy = "Creating the backup disk…"
+        defer { timeMachineBusy = nil }
+        try await TimeMachineDisk.create(mountPath: mount, sizeGB: sizeGB)
+        log(id, "timemachine", "Created a \(sizeGB) GB Time Machine disk on \(d.name).", .info)
+        await openTimeMachineDisk(id)
+    }
+
+    public func openTimeMachineDisk(_ id: String) async {
+        guard let mount = state(id).mountPath else { return }
+        timeMachineBusy = "Opening the backup disk…"
+        defer { timeMachineBusy = nil }
+        do {
+            try await TimeMachineDisk.attach(mountPath: mount)
+            log(id, "timemachine", "Time Machine disk ready at /Volumes/\(TimeMachineDisk.volumeName).", .info)
+        } catch {
+            log(id, "timemachine", "Could not open the Time Machine disk: \(error.detail)", .error)
+        }
+    }
+
+    public func closeTimeMachineDisk() async throws(DriveError) {
+        try await TimeMachineDisk.detach()
     }
 
     // MARK: Upload queue

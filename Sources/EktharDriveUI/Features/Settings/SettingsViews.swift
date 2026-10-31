@@ -123,6 +123,7 @@ struct GeneralSettingsView: View {
                 Text("Previews read part of each file shown in icon view. Read-ahead loads the first 2 MB of a selected file so it opens at once.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            TimeMachineSection()
             ForEach(drives.drives) { d in DriveSettingsSection(drive: d) }
         }
         .formStyle(.grouped)
