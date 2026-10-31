@@ -196,14 +196,14 @@ import Testing
         Failed to about: googleapi: got HTTP response code 403 with body: {
           "error": {
             "code": 403,
-            "message": "Google Drive API has not been used in project 47754236417 before or it is disabled.",
+            "message": "Google Drive API has not been used in project 123456789012 before or it is disabled.",
             "details": [ { "@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "SERVICE_DISABLED" } ]
           }
         }
         """
         let e = ErrorClassifier.classify(output: disabled.components(separatedBy: "\n"), exitCode: 1)
         if case .authenticationFailed(let d) = e {
-            #expect(d.contains("turned off") && d.contains("project=47754236417"), "\(d)")
+            #expect(d.contains("turned off") && d.contains("project=123456789012"), "\(d)")
         } else { Issue.record("got \(e)") }
 
         let scope = #"googleapi: Error 403: Request had insufficient authentication scopes., insufficientPermissions"#
