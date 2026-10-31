@@ -17,17 +17,21 @@ struct DriveBrowserView: View {
             let rt = drives.state(d.id)
             VStack(spacing: 0) {
                 if let e = browser.error ?? (rt.phase.isActive ? rt.lastError : nil) {
-                    ErrorBanner(error: e, actions: browser.error != nil ? [("Dismiss", { browser.error = nil })] : [])
-                        .padding([.horizontal, .top], 14)
+                    ErrorBanner(error: e, actions: browser.error != nil ? [("Dismiss", { withAnimation(Theme.spring) { browser.error = nil } })] : [])
+                        .padding(.horizontal, 18).padding(.top, 14)
                 }
                 if rt.phase.isActive, browser.root != nil {
                     content(d)
-                    Divider()
+                        .transition(.opacity.combined(with: .scale(scale: 0.985)))
                     BrowserBottomBar(browser: browser, drive: d)
                 } else {
                     NotMountedView(drive: d)
+                        .transition(.opacity.combined(with: .scale(scale: 1.01)))
                 }
             }
+            .background(Theme.canvas)
+            .animation(Theme.spring, value: rt.phase.isActive)
+            .animation(Theme.spring, value: browser.error)
             .navigationTitle(rt.phase.isActive ? (browser.current?.standardizedFileURL == browser.root?.standardizedFileURL ? d.name : (browser.current?.lastPathComponent ?? d.name)) : d.name)
             .navigationSubtitle(rt.phase.isActive ? "\(browser.visibleItems.count) items" : rt.connection.label)
             .searchable(text: $browser.search, placement: .toolbar, prompt: "Search \(browser.current?.lastPathComponent ?? d.name)")
@@ -67,23 +71,32 @@ struct DriveBrowserView: View {
             }
         }
         .overlay {
-            if browser.loading && browser.items.isEmpty {
-                ProgressView().controlSize(.large)
+            if browser.loading && browser.items.isEmpty && browser.viewMode == .list {
+                ProgressView().controlSize(.regular)
             } else if !browser.loading && browser.visibleItems.isEmpty {
-                ContentUnavailableView(browser.search.isEmpty ? "This folder is empty" : "No results",
-                                       systemImage: browser.search.isEmpty ? "folder" : "magnifyingglass",
-                                       description: Text(browser.search.isEmpty ? "Drag files here to upload them to \(d.name)." : "Nothing in this folder matches “\(browser.search)”."))
+                EmptyStateView(title: browser.search.isEmpty ? "This folder is empty" : "No results",
+                               message: browser.search.isEmpty ? "Drag files here to upload them to \(d.name)." : "Nothing in this folder matches “\(browser.search)”.",
+                               symbol: browser.search.isEmpty ? "tray" : "magnifyingglass")
             }
         }
         .overlay {
             if dropTargeted {
-                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
-                    .background(Color.accentColor.opacity(0.05), in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
-                    .padding(10)
-                    .allowsHitTesting(false)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(Theme.accent.opacity(0.05))
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(Theme.accent.opacity(0.7), style: StrokeStyle(lineWidth: 2, dash: [9, 7]))
+                    VStack(spacing: 10) {
+                        Image(systemName: "arrow.down.doc.fill").font(.system(size: 34, weight: .medium)).foregroundStyle(Theme.accentGradient)
+                        Text("Drop to upload to \(browser.current?.lastPathComponent ?? d.name)").font(.bodyStrong).foregroundStyle(Theme.accent)
+                    }
+                }
+                .padding(14)
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                .allowsHitTesting(false)
             }
         }
+        .animation(Theme.snappy, value: dropTargeted)
         .dropDestination(for: URL.self) { urls, _ in
             Task { await browser.receive(urls) }
             return true
@@ -160,11 +173,15 @@ struct FileGridView: View {
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 128), spacing: 8)], spacing: 10) {
-                ForEach(browser.visibleItems) { item in
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 112, maximum: 132), spacing: 10)], spacing: 14) {
+                if browser.loading && browser.items.isEmpty {
+                    ForEach(0..<12, id: \.self) { _ in SkeletonTile() }
+                }
+                ForEach(Array(browser.visibleItems.enumerated()), id: \.element.id) { i, item in
                     FileTile(item: item, selected: browser.selection.contains(item.url))
+                        .appearAnimation(index: i, offset: 8)
                         .onTapGesture(count: 2) { browser.open(item) }
-                        .onTapGesture { browser.select(item, extend: NSEvent.modifierFlags.contains(.command)) }
+                        .onTapGesture { withAnimation(Theme.snappy) { browser.select(item, extend: NSEvent.modifierFlags.contains(.command)) } }
                         .contextMenu { FileContextMenu(item: item, browser: browser, actions: actions) }
                         .draggable(item.url)
                         .dropDestination(for: URL.self) { urls, _ in
@@ -174,10 +191,12 @@ struct FileGridView: View {
                         }
                 }
             }
-            .padding(16)
+            .padding(.horizontal, 22).padding(.vertical, 18)
+            .id(browser.current) // new folder = fresh staggered entrance
         }
+        .background(Theme.canvas)
         .contentShape(Rectangle())
-        .onTapGesture { browser.selection = [] }
+        .onTapGesture { withAnimation(Theme.snappy) { browser.selection = [] } }
         .contextMenu { BackgroundContextMenu(browser: browser) }
     }
 }
@@ -185,26 +204,40 @@ struct FileGridView: View {
 struct FileTile: View {
     let item: FileItem
     let selected: Bool
+    @State private var hovering = false
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             Image(nsImage: FileIcons.icon(for: item))
                 .resizable().interpolation(.high)
-                .frame(width: 60, height: 60)
-                .padding(6)
-                .background(selected ? Color.primary.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous))
-            Text(item.name)
-                .font(.callout)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .foregroundStyle(selected ? .white : .primary)
-                .background(selected ? Color.accentColor : .clear, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .frame(width: 64, height: 64)
+                .shadow(color: .black.opacity(hovering ? 0.14 : 0.06), radius: hovering ? 8 : 3, y: hovering ? 5 : 2)
+                .scaleEffect(hovering && !selected ? 1.05 : 1)
+            VStack(spacing: 2) {
+                Text(item.name)
+                    .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(selected ? Theme.accent : Theme.ink)
+                Text(item.isDirectory ? "Folder" : ByteFormat.string(item.size))
+                    .font(.system(size: 10.5)).monospacedDigit().foregroundStyle(Theme.inkTertiary)
+            }
         }
         .frame(width: 104)
-        .padding(.vertical, 4)
-        .contentShape(RoundedRectangle(cornerRadius: Theme.tileRadius, style: .continuous))
+        .padding(.vertical, 12).padding(.horizontal, 4)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(selected ? Theme.accentSoft : (hovering ? Theme.surface : .clear))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(selected ? Theme.accent.opacity(0.35) : .clear, lineWidth: 1)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .animation(Theme.snappy, value: hovering)
+        .animation(Theme.snappy, value: selected)
+        .onHover { hovering = $0 }
         .help(item.name)
     }
 }
@@ -295,46 +328,53 @@ struct BrowserBottomBar: View {
 
     var body: some View {
         let rt = drives.state(drive.id)
-        VStack(spacing: 0) {
+        HStack(spacing: 12) {
             if let root = browser.root, let current = browser.current {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 2) {
+                    HStack(spacing: 3) {
                         let crumbs = FileBrowsing.breadcrumbs(for: current, root: root, rootName: drive.name)
                         ForEach(Array(crumbs.enumerated()), id: \.offset) { i, c in
-                            if i > 0 { Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary) }
-                            Button { browser.navigate(to: c.url) } label: {
-                                Label(c.name, systemImage: i == 0 ? drive.provider.symbol : "folder.fill")
-                                    .font(.caption)
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(i == crumbs.count - 1 ? Color.primary.opacity(0.07) : .clear, in: Capsule())
+                            if i > 0 { Image(systemName: "chevron.compact.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.inkTertiary) }
+                            let last = i == crumbs.count - 1
+                            Button { withAnimation(Theme.spring) { browser.navigate(to: c.url) } } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: i == 0 ? drive.provider.symbol : "folder.fill")
+                                        .font(.system(size: 10.5, weight: .semibold))
+                                        .foregroundStyle(i == 0 ? drive.provider.tint : Theme.accent.opacity(0.8))
+                                    Text(c.name).font(.system(size: 11.5, weight: last ? .semibold : .medium)).foregroundStyle(last ? Theme.ink : Theme.inkSecondary)
+                                }
+                                .padding(.horizontal, 9).padding(.vertical, 4)
+                                .background(Capsule().fill(last ? Theme.canvas : .clear).shadow(color: .black.opacity(last ? 0.06 : 0), radius: 2, y: 1))
+                                .overlay(Capsule().strokeBorder(last ? Theme.hairline : .clear))
                             }
                             .buttonStyle(.plain)
                             .dropDestination(for: URL.self) { urls, _ in
                                 Task { await browser.receive(urls, into: c.url) }
                                 return true
                             }
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 10)
+                    .animation(Theme.spring, value: current)
                 }
-                .frame(height: 26)
-                Divider().opacity(0.5)
             }
-            HStack(spacing: 6) {
-                Text(statusText).monospacedDigit()
+            Spacer(minLength: 0)
+            HStack(spacing: 8) {
                 if let pending = rt.cache?.pendingUploads, pending > 0 {
-                    Text("·")
-                    ProgressView().controlSize(.mini)
-                    Text("Uploading \(pending)")
+                    Pill(text: "Uploading \(pending)", color: Theme.accent, symbol: "arrow.up")
+                        .transition(.scale.combined(with: .opacity))
                 }
                 if browser.loading { ProgressView().controlSize(.mini) }
+                Text(statusText).font(.system(size: 11, weight: .medium)).monospacedDigit().foregroundStyle(Theme.inkSecondary)
+                    .contentTransition(.numericText())
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-            .frame(height: 24)
+            .padding(.trailing, 14)
+            .animation(Theme.snappy, value: rt.cache?.pendingUploads)
         }
-        .background(.bar)
+        .frame(height: 36)
+        .background(Theme.surface)
+        .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
     }
 
     private var statusText: String {
@@ -355,22 +395,29 @@ struct NotMountedView: View {
     var body: some View {
         let rt = drives.state(drive.id)
         ScrollView {
-            VStack(spacing: 22) {
-                DriveIconTile(provider: drive.provider, size: 84)
-                VStack(spacing: 6) {
-                    Text(drive.name).font(.largeTitle.weight(.semibold))
-                    StatusLabel(text: rt.phase == .unmounted ? rt.connection.label : rt.phase.label, health: rt.health)
+            VStack(spacing: 26) {
+                ZStack {
+                    Circle().fill(drive.provider.tint.opacity(0.08)).frame(width: 170, height: 170).blur(radius: 2)
+                    Circle().strokeBorder(drive.provider.tint.opacity(0.10), lineWidth: 1).frame(width: 220, height: 220)
+                    DriveIconTile(provider: drive.provider, size: 92)
                 }
+                .appearAnimation(index: 0, offset: 14)
+                VStack(spacing: 8) {
+                    Text(drive.name).displayStyle()
+                    StatusLabel(text: rt.phase == .unmounted ? rt.connection.label : rt.phase.label, health: rt.health, pulsing: rt.phase.isBusy)
+                }
+                .appearAnimation(index: 1)
                 if rt.connection.isConfigured {
-                    HStack(spacing: 28) {
-                        CapacityRing(usage: rt.usage, size: 92, lineWidth: 9)
-                        VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 30) {
+                        CapacityRing(usage: rt.usage, size: 104, lineWidth: 10)
+                        VStack(alignment: .leading, spacing: 10) {
                             stat("Used", ByteFormat.string(rt.usage?.used))
                             stat("Available", ByteFormat.string(rt.usage?.free))
                             stat("Total", ByteFormat.string(rt.usage?.total))
                         }
                     }
-                    .premiumCard()
+                    .premiumCard(radius: 22, padding: 24)
+                    .appearAnimation(index: 2)
                 }
                 if let e = rt.lastError {
                     ErrorBanner(error: e, actions: e.category == .authentication || e == .notConfigured ? [("Review Account", { showConnect = true })] : [])
@@ -379,30 +426,38 @@ struct NotMountedView: View {
                 HStack(spacing: 12) {
                     if rt.connection.isConfigured {
                         Button { Task { await drives.mount(drive.id) } } label: {
-                            Label(rt.phase == .mounting ? "Mounting…" : "Mount \(drive.name)", systemImage: "play.fill").frame(minWidth: 160)
+                            HStack(spacing: 7) {
+                                if rt.phase == .mounting { ProgressView().controlSize(.small).tint(.white) } else { Image(systemName: "play.fill") }
+                                Text(rt.phase == .mounting ? "Mounting…" : "Mount \(drive.name)")
+                            }
+                            .frame(minWidth: 190)
                         }
-                        .buttonStyle(.borderedProminent).controlSize(.large)
+                        .buttonStyle(.primaryLarge)
                         .disabled(rt.phase == .mounting)
-                        Button("Account…") { showConnect = true }.controlSize(.large)
+                        Button("Account…") { showConnect = true }.buttonStyle(.secondaryLarge)
                     } else {
                         Button { showConnect = true } label: {
-                            Label(drive.provider == .googleDrive ? "Connect Google Drive" : "Connect Oracle Server", systemImage: "link").frame(minWidth: 200)
+                            Label(drive.provider == .googleDrive ? "Connect Google Drive" : "Connect Oracle Server", systemImage: "link").frame(minWidth: 220)
                         }
-                        .buttonStyle(.borderedProminent).controlSize(.large)
+                        .buttonStyle(.primaryLarge)
                         .disabled(drives.dependencies?.rclone == nil)
                     }
                 }
+                .appearAnimation(index: 3)
                 if drives.dependencies?.rclone == nil {
-                    Text("Install rclone in Settings > Advanced first.").font(.callout).foregroundStyle(.orange)
+                    Text("Install rclone in Settings > Advanced first.").font(.caption12).foregroundStyle(Theme.warning)
                 }
                 Text(drive.provider == .googleDrive
                      ? "Files open on demand. Nothing is downloaded until you use it."
                      : "Connects over SSH with your key. Ekthar Drive never changes your server.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.caption12).foregroundStyle(Theme.inkTertiary)
+                    .appearAnimation(index: 4)
             }
-            .padding(40)
+            .padding(.vertical, 56).padding(.horizontal, 40)
             .frame(maxWidth: .infinity)
+            .animation(Theme.spring, value: rt.phase)
         }
+        .background(Theme.canvas)
         .sheet(isPresented: $showConnect) {
             if drive.provider == .googleDrive { GoogleConnectSheet().environment(drives) } else { OracleConfigSheet().environment(drives) }
         }
@@ -412,9 +467,10 @@ struct NotMountedView: View {
     }
 
     private func stat(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(.secondary).frame(width: 74, alignment: .leading)
-            Text(value).monospacedDigit().fontWeight(.medium)
+        HStack(spacing: 14) {
+            Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.inkTertiary).frame(width: 70, alignment: .leading)
+            Text(value).font(.system(size: 16, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(Theme.ink)
+                .contentTransition(.numericText())
         }
     }
 }

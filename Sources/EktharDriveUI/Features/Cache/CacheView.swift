@@ -29,6 +29,8 @@ struct CacheView: View {
             if let message { Section { Text(message).foregroundStyle(.secondary) } }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(Theme.canvas)
         .navigationTitle("Cache")
         .toolbar { Button { drives.measureCaches(); Task { _ = await drives.pollOnce() } } label: { Label("Refresh", systemImage: "arrow.clockwise") } }
         .task { drives.measureCaches() }

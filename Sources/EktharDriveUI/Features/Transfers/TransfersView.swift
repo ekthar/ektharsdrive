@@ -52,6 +52,8 @@ struct TransfersView: View {
                                        description: Text(scope == .active ? "Uploads and downloads through your mounted drives appear here as rclone reports them." : "Completed and failed transfers are kept here."))
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(Theme.canvas)
         .navigationTitle("Transfers")
         .toolbar {
             Picker("Show", selection: $scope) { ForEach(Scope.allCases, id: \.self) { Text($0.rawValue) } }

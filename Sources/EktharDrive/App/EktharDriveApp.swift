@@ -1,4 +1,5 @@
 import EktharDriveCore
+import EktharDriveUI
 import SwiftUI
 
 @main
@@ -42,8 +43,4 @@ struct EktharDriveApp: App {
         }
         .menuBarExtraStyle(.menu)
     }
-}
-
-enum AppWindow {
-    static let main = "main"
 }

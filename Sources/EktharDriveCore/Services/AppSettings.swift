@@ -10,7 +10,7 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var launchAtLogin = false
     public var startMinimized = false
     public var notificationsEnabled = true
-    public var theme: AppTheme = .system
+    public var theme: AppTheme = .light
     public var mountEngine: MountEngine = .automatic
     public var rclonePath: String?
     public var logLevel = "INFO"

@@ -7,8 +7,8 @@ import ServiceManagement
 /// Builds the object graph once and holds app-level UI state.
 @MainActor
 @Observable
-final class AppModel {
-    let drives: DriveManager
+public final class AppModel {
+    public let drives: DriveManager
     let loginItems = LoginItemController()
     var selection: SidebarItem? = .dashboard
     var settingsTab: SettingsTab = .accounts
@@ -24,7 +24,7 @@ final class AppModel {
     }
     var fatalError: String?
 
-    init() {
+    public init() {
         let paths = AppPaths.standard()
         try? paths.prepare()
         let database: AppDatabase
@@ -39,14 +39,26 @@ final class AppModel {
         drives = DriveManager(paths: paths, secrets: KeychainStore(), database: database, notifier: UserNotifier())
     }
 
-    func start() async {
+    /// For previews and the snapshot tool: wrap an existing manager.
+    public init(drives: DriveManager) {
+        self.drives = drives
+    }
+
+    public func select(_ item: SidebarItem) { selection = item }
+
+    public func start() async {
         await drives.start()
         applyTheme()
+        // The app is designed white-first. Move existing installs from "System" to Light once.
+        if drives.database.setting("ui.whiteTheme") == nil {
+            try? drives.database.setSetting("ui.whiteTheme", "1")
+            if drives.settings.theme == .system { updateSettings { $0.theme = .light } }
+        }
         if !drives.settings.setupCompleted { showSetup = true }
         loginItems.refresh()
     }
 
-    func applyTheme() {
+    public func applyTheme() {
         switch drives.settings.theme {
         case .system: NSApp.appearance = nil
         case .light: NSApp.appearance = NSAppearance(named: .aqua)
@@ -62,7 +74,7 @@ final class AppModel {
     }
 }
 
-enum SidebarItem: Hashable {
+public enum SidebarItem: Hashable {
     case dashboard
     case drive(String)
     case transfers, cache, activity

@@ -1,13 +1,14 @@
 import EktharDriveCore
 import SwiftUI
 
-enum SettingsTab: Hashable { case accounts, general, advanced, about }
+public enum SettingsTab: Hashable { case accounts, general, advanced, about }
 
 /// Standard macOS Settings window (⌘,).
-struct SettingsRoot: View {
+public struct SettingsRoot: View {
+    public init() {}
     @Environment(AppModel.self) private var model
 
-    var body: some View {
+    public var body: some View {
         @Bindable var model = model
         TabView(selection: $model.settingsTab) {
             AccountsView().tabItem { Label("Accounts", systemImage: "person.crop.circle") }.tag(SettingsTab.accounts)

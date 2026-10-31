@@ -1,5 +1,6 @@
 import AppKit
 import EktharDriveCore
+import EktharDriveUI
 import SwiftUI
 
 @MainActor
@@ -92,32 +93,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lockFD = open(path, O_CREAT | O_RDWR, 0o600)
         guard lockFD >= 0 else { return true }
         return flock(lockFD, LOCK_EX | LOCK_NB) == 0
-    }
-}
-
-@MainActor
-enum AppActions {
-    static var openWindowAction: OpenWindowAction?
-    static var openSettingsAction: OpenSettingsAction?
-
-    static func openSettings(_ tab: SettingsTab, model: AppModel) {
-        model.settingsTab = tab
-        NSApp.activate()
-        openSettingsAction?()
-    }
-
-    static func openDashboard() {
-        NSApp.setActivationPolicy(.regular)
-        if let w = NSApp.windows.first(where: { $0.canBecomeMain && $0.identifier?.rawValue.contains(AppWindow.main) == true }) {
-            w.makeKeyAndOrderFront(nil)
-        } else {
-            openWindowAction?(id: AppWindow.main)
-        }
-        NSApp.activate()
-    }
-
-    static func openInFinder(_ path: String?) {
-        guard let path, MountTable.isMounted(path) else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path, isDirectory: true)])
     }
 }

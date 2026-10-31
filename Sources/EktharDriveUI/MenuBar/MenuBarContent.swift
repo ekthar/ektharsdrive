@@ -1,9 +1,10 @@
 import EktharDriveCore
 import SwiftUI
 
-struct MenuBarIcon: View {
+public struct MenuBarIcon: View {
     let drives: DriveManager
-    var body: some View {
+    public init(drives: DriveManager) { self.drives = drives }
+    public var body: some View {
         switch drives.overallHealth {
         case .error: Image(systemName: "externaldrive.badge.exclamationmark")
         case .degraded: Image(systemName: "externaldrive.badge.timemachine")
@@ -14,11 +15,12 @@ struct MenuBarIcon: View {
 }
 
 /// Menu-bar menu. Every line is read from DriveManager state; nothing is hardcoded.
-struct MenuBarContent: View {
+public struct MenuBarContent: View {
+    public init() {}
     @Environment(AppModel.self) private var model
     @Environment(DriveManager.self) private var drives
 
-    var body: some View {
+    public var body: some View {
         Text("EKTHAR DRIVE")
         ForEach(drives.drives) { d in
             let rt = drives.state(d.id)

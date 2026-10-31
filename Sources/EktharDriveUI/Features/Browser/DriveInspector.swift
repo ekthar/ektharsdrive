@@ -26,6 +26,7 @@ struct DriveInspector: View {
             }
             .padding(14)
         }
+        .background(Theme.surface)
         .sheet(isPresented: $showConnect) {
             if drive.provider == .googleDrive { GoogleConnectSheet().environment(drives) } else { OracleConfigSheet().environment(drives) }
         }
@@ -114,7 +115,8 @@ struct DriveInspector: View {
                     row("Mounted at", rt.mountPath ?? "--")
                     row("Engine", rt.engine?.displayName ?? "--")
                 }
-                row("Cache", "\(ByteFormat.string(rt.cache?.bytesUsed)) of \(ByteFormat.string(drive.cache.maxSizeBytes))")
+                row("Cache", rt.cache.map { "\(ByteFormat.string($0.bytesUsed)) of \(ByteFormat.string(drive.cache.maxSizeBytes))" }
+                    ?? "Empty · limit \(ByteFormat.string(drive.cache.maxSizeBytes))")
                 row("Uploading", "\(rt.cache?.pendingUploads ?? 0)")
                 row("Last connected", rt.lastSuccessfulConnection?.relative ?? "Never")
             }

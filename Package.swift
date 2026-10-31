@@ -14,11 +14,23 @@ let package = Package(
             path: "Sources/EktharDriveCore",
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
+        // All screens. A library so the snapshot tool can render them to images.
+        .target(
+            name: "EktharDriveUI",
+            dependencies: ["EktharDriveCore"],
+            path: "Sources/EktharDriveUI"
+        ),
         .executableTarget(
             name: "EktharDrive",
-            dependencies: ["EktharDriveCore"],
+            dependencies: ["EktharDriveCore", "EktharDriveUI"],
             path: "Sources/EktharDrive",
             exclude: ["Resources"]
+        ),
+        // Renders key screens with sample data to PNGs: swift run UISnapshots <out-dir>
+        .executableTarget(
+            name: "UISnapshots",
+            dependencies: ["EktharDriveCore", "EktharDriveUI"],
+            path: "Sources/UISnapshots"
         ),
         .testTarget(
             name: "UnitTests",

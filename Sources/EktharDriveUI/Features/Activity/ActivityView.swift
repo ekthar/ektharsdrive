@@ -44,6 +44,8 @@ struct ActivityView: View {
             }
         }
         .searchable(text: $search, prompt: "Search activity")
+        .scrollContentBackground(.hidden)
+        .background(Theme.canvas)
         .navigationTitle("Activity")
         .toolbar {
             Picker("Drive", selection: $driveFilter) {

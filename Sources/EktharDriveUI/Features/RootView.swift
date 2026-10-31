@@ -1,13 +1,14 @@
 import EktharDriveCore
 import SwiftUI
 
-struct RootView: View {
+public struct RootView: View {
+    public init() {}
     @Environment(AppModel.self) private var model
     @Environment(DriveManager.self) private var drives
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
 
-    var body: some View {
+    public var body: some View {
         @Bindable var model = model
         NavigationSplitView {
             Sidebar()
@@ -15,6 +16,8 @@ struct RootView: View {
         } detail: {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(Theme.canvas)
+                .animation(Theme.spring, value: model.selection)
         }
         .sheet(isPresented: $model.showSetup) {
             SetupWizardView().environment(model).environment(drives)
@@ -70,10 +73,13 @@ struct Sidebar: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
-            Image(systemName: "laptopcomputer").foregroundStyle(.secondary)
+            ZStack {
+                RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Theme.accentGradient).frame(width: 26, height: 26)
+                Image(systemName: "laptopcomputer").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+            }
             VStack(alignment: .leading, spacing: 1) {
-                Text("This Mac").font(.caption.weight(.semibold))
-                Text("\(ByteFormat.string(DiskSpace.freeBytes(at: drives.paths.cacheRoot.path))) free").font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                Text("This Mac").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.ink)
+                Text("\(ByteFormat.string(DiskSpace.freeBytes(at: drives.paths.cacheRoot.path))) free").font(.system(size: 10.5)).foregroundStyle(Theme.inkSecondary).monospacedDigit()
             }
             Spacer()
             SettingsLink { Image(systemName: "gearshape") }
@@ -81,8 +87,8 @@ struct Sidebar: View {
                 .help("Settings")
         }
         .padding(10)
-        .background(.background.opacity(0.5), in: RoundedRectangle(cornerRadius: Theme.tileRadius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Theme.tileRadius, style: .continuous).strokeBorder(Theme.hairline))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.canvas.opacity(0.85)).shadow(color: .black.opacity(0.05), radius: 6, y: 2))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.hairline))
         .padding(10)
     }
 }
@@ -98,7 +104,7 @@ struct DriveSidebarRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(drive.name)
                     if let f = rt.usage?.usedFraction {
-                        ProgressView(value: f).controlSize(.mini).tint(f > 0.9 ? .red : .accentColor).frame(maxWidth: 90)
+                        CapacityBar(fraction: f, height: 3).frame(maxWidth: 96)
                     }
                 }
             } icon: { Image(systemName: drive.provider.symbol) }
@@ -114,7 +120,7 @@ struct DriveSidebarRow: View {
             case .mounting, .unmounting, .waitingForUploads, .retrying:
                 ProgressView().controlSize(.mini)
             default:
-                StatusDot(health: rt.health)
+                StatusDot(health: rt.health, pulsing: rt.phase.isBusy)
             }
         }
     }
