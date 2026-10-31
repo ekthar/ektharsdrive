@@ -19,12 +19,13 @@ struct DriveBrowserView: View {
                         .padding(.horizontal, 18).padding(.top, 14)
                 }
                 if rt.phase.isActive, browser.root != nil {
+                    // Files scroll under the floating glass path bar.
                     content(d)
-                        .transition(.opacity.combined(with: .scale(scale: 0.985)))
-                    BrowserBottomBar(browser: browser, drive: d)
+                        .safeAreaInset(edge: .bottom, spacing: 0) { BrowserBottomBar(browser: browser, drive: d) }
+                        .transition(.opacity)
                 } else {
                     NotMountedView(drive: d)
-                        .transition(.opacity.combined(with: .scale(scale: 1.01)))
+                        .transition(.opacity)
                 }
             }
             .background(Theme.canvas)
@@ -40,13 +41,7 @@ struct DriveBrowserView: View {
             .onKeyPress(.return) { guard browser.singleSelected != nil else { return .ignored }; browser.requestRename(); return .handled }
             .overlay(alignment: .bottom) {
                 if let toast = browser.toast {
-                    Text(toast)
-                        .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                        .background(Capsule().fill(Theme.ink.opacity(0.88)))
-                        .shadow(color: .black.opacity(0.2), radius: 12, y: 6)
-                        .padding(.bottom, 52)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    GlassToast(text: toast).padding(.bottom, 60)
                 }
             }
             .animation(Theme.spring, value: browser.toast)
@@ -168,7 +163,7 @@ struct DriveBrowserView: View {
                 Button { Task { await drives.mount(d.id) } } label: { Label("Mount", systemImage: "play.fill") }
                     .disabled(rt.phase == .mounting)
             }
-            Button { withAnimation(Theme.spring) { browser.toggleInspector() } } label: { Label(browser.showInspector ? "Hide Info" : "Show Info", systemImage: "sidebar.right").labelStyle(.iconOnly) }
+            Button { browser.toggleInspector() } label: { Label(browser.showInspector ? "Hide Info" : "Show Info", systemImage: "sidebar.right").labelStyle(.iconOnly) }
                 .help("Show or hide info")
         }
     }
@@ -193,10 +188,10 @@ struct FileGridView: View {
                     ForEach(0..<12, id: \.self) { _ in SkeletonTile() }
                 }
                 ForEach(Array(browser.visibleItems.enumerated()), id: \.element.id) { i, item in
+                    // No entrance or selection animation: folders open and selection changes hundreds of times a day.
                     FileTile(item: item, selected: browser.selection.contains(item.url))
-                        .appearAnimation(index: i, offset: 8, enabled: i < 24)
                         .onTapGesture(count: 2) { browser.open(item) }
-                        .onTapGesture { withAnimation(Theme.snappy) { browser.select(item, extend: NSEvent.modifierFlags.contains(.command)) } }
+                        .onTapGesture { browser.select(item, extend: NSEvent.modifierFlags.contains(.command)) }
                         .contextMenu { FileContextMenu(item: item, browser: browser, actions: actions) }
                         .onDrag { NSItemProvider(contentsOf: item.url) ?? NSItemProvider(object: item.url as NSURL) }
                         .dropDestination(for: URL.self) { urls, _ in
@@ -207,11 +202,10 @@ struct FileGridView: View {
                 }
             }
             .padding(.horizontal, 22).padding(.vertical, 18)
-            .id(browser.current) // new folder = fresh staggered entrance
         }
         .background(Theme.canvas)
         .contentShape(Rectangle())
-        .onTapGesture { withAnimation(Theme.snappy) { browser.selection = [] } }
+        .onTapGesture { browser.selection = [] }
         .contextMenu { BackgroundContextMenu(browser: browser) }
     }
 }
@@ -378,7 +372,7 @@ struct BrowserBottomBar: View {
                         ForEach(Array(crumbs.enumerated()), id: \.offset) { i, c in
                             if i > 0 { Image(systemName: "chevron.compact.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.inkTertiary) }
                             let last = i == crumbs.count - 1
-                            Button { withAnimation(Theme.spring) { browser.navigate(to: c.url) } } label: {
+                            Button { browser.navigate(to: c.url) } label: {
                                 HStack(spacing: 5) {
                                     Image(systemName: i == 0 ? drive.provider.symbol : "folder.fill")
                                         .font(.system(size: 10.5, weight: .semibold))
@@ -386,7 +380,7 @@ struct BrowserBottomBar: View {
                                     Text(c.name).font(.system(size: 11.5, weight: last ? .semibold : .medium)).foregroundStyle(last ? Theme.ink : Theme.inkSecondary)
                                 }
                                 .padding(.horizontal, 9).padding(.vertical, 4)
-                                .background(Capsule().fill(last ? Theme.canvas : .clear).shadow(color: .black.opacity(last ? 0.06 : 0), radius: 2, y: 1))
+                                .background(Capsule().fill(last ? Theme.canvas.opacity(0.75) : .clear))
                                 .overlay(Capsule().strokeBorder(last ? Theme.hairline : .clear))
                             }
                             .buttonStyle(.plain)
@@ -394,12 +388,11 @@ struct BrowserBottomBar: View {
                                 Task { await browser.receive(urls, into: c.url) }
                                 return true
                             }
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .animation(Theme.spring, value: current)
+                    .padding(.horizontal, 8)
                 }
+                .clipShape(Capsule())
             }
             Spacer(minLength: 0)
             HStack(spacing: 8) {
@@ -423,9 +416,9 @@ struct BrowserBottomBar: View {
             .padding(.trailing, 14)
             .animation(Theme.snappy, value: rt.cache?.pendingUploads)
         }
-        .frame(height: 36)
-        .background(Theme.surface)
-        .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
+        .frame(height: 34)
+        .glassCapsule()
+        .padding(.horizontal, 12).padding(.bottom, 10)
     }
 
     private var shortStatusText: String {

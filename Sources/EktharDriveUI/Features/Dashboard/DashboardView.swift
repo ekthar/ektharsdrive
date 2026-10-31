@@ -153,21 +153,18 @@ struct DashboardView: View {
     }
 }
 
-/// Round badge on the right of the hero: a ring of color that breathes when everything is fine.
+/// Round badge on the right of the hero, tinted by overall health. Still: motion here would only distract.
 struct HealthBadge: View {
     let level: HealthLevel
-    @State private var breathe = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
-            Circle().fill(level.color.opacity(0.08)).frame(width: 74, height: 74).scaleEffect(breathe ? 1.06 : 0.96)
+            Circle().fill(level.color.opacity(0.08)).frame(width: 74, height: 74)
             Circle().fill(Theme.canvas).frame(width: 56, height: 56).shadow(color: .black.opacity(0.08), radius: 10, y: 5)
                 .overlay(Circle().strokeBorder(Theme.hairline))
             Image(systemName: symbol).font(.system(size: 22, weight: .semibold)).foregroundStyle(level.color.gradient)
                 .contentTransition(.symbolEffect(.replace))
         }
-        .onAppear { if !reduceMotion { withAnimation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true)) { breathe = true } } }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Overall status: \(level.label)")
     }
@@ -210,7 +207,7 @@ struct DriveCard: View {
             .padding(.vertical, 12)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.surface))
             HStack(spacing: 10) {
-                Button { withAnimation(Theme.spring) { model.selection = .drive(drive.id) } } label: {
+                Button { model.selection = .drive(drive.id) } label: {
                     Label(rt.phase.isActive ? "Browse files" : "Open", systemImage: "folder").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.secondaryLarge)

@@ -17,7 +17,6 @@ public struct RootView: View {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(Theme.canvas)
-                .animation(Theme.spring, value: model.selection)
         }
         .background(GeometryReader { g in
             Color.clear.onChange(of: g.size.width, initial: true) { _, w in if abs(model.windowWidth - w) > 1 { model.windowWidth = w } }

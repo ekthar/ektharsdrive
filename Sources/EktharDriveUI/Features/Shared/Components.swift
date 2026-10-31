@@ -255,8 +255,6 @@ struct TransferRow: View {
 struct EmptyStateArt: View {
     let symbol: String
     var tint: Color = Theme.accent
-    @State private var float = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -268,8 +266,6 @@ struct EmptyStateArt: View {
                 .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(Theme.hairline))
             Image(systemName: symbol).font(.system(size: 36, weight: .medium)).foregroundStyle(tint.gradient)
         }
-        .offset(y: float ? -4 : 2)
-        .onAppear { if !reduceMotion { withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) { float = true } } }
     }
 }
 

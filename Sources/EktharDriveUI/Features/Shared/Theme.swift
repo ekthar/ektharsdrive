@@ -37,9 +37,14 @@ public enum Theme {
     static let controlRadius: CGFloat = 9
 
     // Motion
-    static let spring = Animation.spring(response: 0.42, dampingFraction: 0.82)
-    static let snappy = Animation.spring(response: 0.26, dampingFraction: 0.86)
-    static let gentle = Animation.easeOut(duration: 0.35)
+    // UI motion stays under 300 ms. No bounce: these are tools, not toys.
+    static let spring = Animation.spring(duration: 0.28, bounce: 0)
+    static let snappy = Animation.spring(duration: 0.2, bounce: 0)
+    /// Press feedback: quick in, so a click feels instant.
+    static let press = Animation.easeOut(duration: 0.12)
+    static let gentle = Animation.easeOut(duration: 0.2)
+    /// Exits are quicker than entrances.
+    static let exit = Animation.easeIn(duration: 0.15)
 }
 
 // MARK: - Typography (SF Pro, tuned sizes, weights and tracking)
@@ -100,6 +105,50 @@ extension View {
     }
 }
 
+// MARK: - Liquid Glass
+
+/// Liquid Glass for the functional layer only (floating bars, toasts). Never on content cards.
+/// macOS 26+ gets real glass; older systems get a material with a hairline. Reduce Transparency
+/// is handled by the system for both.
+struct GlassSurface<S: Shape>: ViewModifier {
+    let shape: S
+    var interactive = false
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+        } else {
+            content
+                .background(.regularMaterial, in: shape)
+                .overlay(shape.stroke(Theme.hairlineStrong, lineWidth: 1))
+                .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
+        }
+    }
+}
+
+extension View {
+    func glassCapsule(interactive: Bool = false) -> some View { modifier(GlassSurface(shape: Capsule(), interactive: interactive)) }
+    func glass(cornerRadius: CGFloat) -> some View {
+        modifier(GlassSurface(shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)))
+    }
+}
+
+/// Short confirmation ("Link copied") floating above the content on glass.
+struct GlassToast: View {
+    let text: String
+    var body: some View {
+        Label(text, systemImage: "checkmark.circle.fill")
+            .font(.system(size: 12.5, weight: .semibold))
+            .foregroundStyle(Theme.ink)
+            .labelStyle(.titleAndIcon)
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .glassCapsule()
+            .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
+                                    removal: .opacity.animation(Theme.exit)))
+            .accessibilityAddTraits(.isStaticText)
+    }
+}
+
 struct HoverLift: ViewModifier {
     let scale: CGFloat
     @State private var hovering = false
@@ -127,7 +176,7 @@ struct AppearIn: ViewModifier {
             .onAppear {
                 guard !shown else { return }
                 if !enabled || reduceMotion { shown = true; return }
-                withAnimation(Theme.spring.delay(min(Double(index), 14) * 0.028)) { shown = true }
+                withAnimation(Theme.spring.delay(min(Double(index), 6) * 0.04)) { shown = true }
             }
     }
 }
@@ -148,7 +197,7 @@ struct PrimaryButtonStyle: ButtonStyle {
             .shadow(color: Theme.accent.opacity(configuration.isPressed ? 0.15 : 0.32), radius: configuration.isPressed ? 4 : 10, y: configuration.isPressed ? 2 : 5)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .opacity(enabled ? 1 : 0.45)
-            .animation(Theme.snappy, value: configuration.isPressed)
+            .animation(Theme.press, value: configuration.isPressed)
     }
 }
 
@@ -167,7 +216,7 @@ struct SecondaryButtonStyle: ButtonStyle {
             .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .opacity(enabled ? 1 : 0.45)
-            .animation(Theme.snappy, value: configuration.isPressed)
+            .animation(Theme.press, value: configuration.isPressed)
     }
 }
 
@@ -288,7 +337,7 @@ struct CapacityRing: View {
         }
         .frame(width: size, height: size)
         .onAppear {
-            if reduceMotion { drawn = fraction ?? 0 } else { withAnimation(.spring(response: 0.9, dampingFraction: 0.85).delay(0.1)) { drawn = fraction ?? 0 } }
+            if reduceMotion { drawn = fraction ?? 0 } else { withAnimation(.easeOut(duration: 0.3)) { drawn = fraction ?? 0 } }
         }
         .onChange(of: fraction) { _, new in withAnimation(reduceMotion ? nil : Theme.spring) { drawn = new ?? 0 } }
         .accessibilityLabel(fraction.map { "\(Int($0 * 100)) percent used" } ?? "Capacity unavailable")
@@ -319,7 +368,7 @@ struct CapacityBar: View {
         }
         .frame(height: height)
         .onAppear {
-            if reduceMotion { drawn = fraction ?? 0 } else { withAnimation(.spring(response: 0.8, dampingFraction: 0.85).delay(0.1)) { drawn = fraction ?? 0 } }
+            if reduceMotion { drawn = fraction ?? 0 } else { withAnimation(.easeOut(duration: 0.3)) { drawn = fraction ?? 0 } }
         }
         .onChange(of: fraction) { _, new in withAnimation(reduceMotion ? nil : Theme.spring) { drawn = new ?? 0 } }
     }

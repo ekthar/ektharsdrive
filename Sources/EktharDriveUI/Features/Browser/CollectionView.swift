@@ -74,9 +74,7 @@ struct CollectionView: View {
         } message: { Text("Google Drive moves all \(entries.count) item(s) back to where they were. Google's API restores whole folders, not single files.") }
         .overlay(alignment: .bottom) {
             if let toast {
-                Text(toast).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white)
-                    .padding(.horizontal, 16).padding(.vertical, 10).background(Capsule().fill(Theme.ink.opacity(0.88)))
-                    .padding(.bottom, 24).transition(.move(edge: .bottom).combined(with: .opacity))
+                GlassToast(text: toast).padding(.bottom, 24)
             }
         }
         .animation(Theme.spring, value: toast)
