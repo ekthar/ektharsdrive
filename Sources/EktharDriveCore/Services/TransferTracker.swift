@@ -40,7 +40,7 @@ public struct TransferTracker: Sendable {
         for item in transferring {
             stillRunning.insert(item.name)
             var t = active[item.name] ?? queued.removeValue(forKey: item.name) ?? makeTransfer(name: item.name, src: item.srcFs, dst: item.dstFs, size: item.size, now: now)
-            t.direction = direction(dst: item.dstFs)
+            t.direction = direction(src: item.srcFs, dst: item.dstFs)
             t.transferredBytes = item.bytes
             t.totalBytes = (item.size ?? -1) >= 0 ? item.size : t.totalBytes
             t.speed = item.speed
@@ -57,7 +57,7 @@ public struct TransferTracker: Sendable {
             var t = active.removeValue(forKey: c.name) ?? queued.removeValue(forKey: c.name)
                 ?? makeTransfer(name: c.name, src: c.srcFs, dst: c.dstFs, size: c.size, now: Self.parseDate(c.startedAt) ?? now)
             if let started = Self.parseDate(c.startedAt), t.startedAt > started { t.startedAt = started }
-            t.direction = direction(dst: c.dstFs)
+            t.direction = direction(src: c.srcFs, dst: c.dstFs)
             t.transferredBytes = c.bytes ?? t.transferredBytes
             if let size = c.size, size >= 0 { t.totalBytes = size }
             t.completedAt = Self.parseDate(c.completedAt) ?? now
@@ -112,13 +112,17 @@ public struct TransferTracker: Sendable {
         }
     }
 
-    private func direction(dst: String?) -> TransferDirection {
-        guard let dst else { return .upload }
-        return dst.hasPrefix(remoteName + ":") ? .upload : .download
+    /// From the remote = download into the cache; to the remote = upload. rclone's cache downloader
+    /// reports the remote as source and often no destination, which used to be mislabelled "upload".
+    private func direction(src: String? = nil, dst: String?) -> TransferDirection {
+        let remote = remoteName + ":"
+        if let src, src.hasPrefix(remote) { return .download }
+        if let dst, dst.hasPrefix(remote) { return .upload }
+        return (dst == nil && src == nil) ? .upload : .download
     }
 
     private func makeTransfer(name: String, src: String?, dst: String?, size: Int64?, now: Date) -> Transfer {
-        let dir = direction(dst: dst)
+        let dir = direction(src: src, dst: dst)
         let remotePath = remoteName + ":" + name
         return Transfer(driveID: driveID, name: (name as NSString).lastPathComponent,
                         sourcePath: dir == .upload ? name : remotePath,
