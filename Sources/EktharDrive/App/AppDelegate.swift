@@ -98,6 +98,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 enum AppActions {
     static var openWindowAction: OpenWindowAction?
+    static var openSettingsAction: OpenSettingsAction?
+
+    static func openSettings(_ tab: SettingsTab, model: AppModel) {
+        model.settingsTab = tab
+        NSApp.activate()
+        openSettingsAction?()
+    }
 
     static func openDashboard() {
         NSApp.setActivationPolicy(.regular)

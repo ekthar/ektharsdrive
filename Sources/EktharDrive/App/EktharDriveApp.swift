@@ -27,6 +27,12 @@ struct EktharDriveApp: App {
             }
         }
 
+        Settings {
+            SettingsRoot()
+                .environment(appDelegate.model)
+                .environment(appDelegate.model.drives)
+        }
+
         MenuBarExtra {
             MenuBarContent()
                 .environment(appDelegate.model)

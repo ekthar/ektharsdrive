@@ -7,132 +7,182 @@ struct DashboardView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 22) {
                 header
                 warnings
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
-                    MetricTile(title: "Connected", value: "\(drives.connectedCount) of \(drives.drives.count)", symbol: "link")
-                    MetricTile(title: "Mounted", value: "\(drives.drives.filter { drives.state($0.id).phase.isActive }.count)", symbol: "externaldrive.connected.to.line.below")
-                    MetricTile(title: "Active transfers", value: "\(drives.allActiveTransfers.count)", symbol: "arrow.up.arrow.down",
-                               detail: pendingDetail)
-                    MetricTile(title: "Cache", value: ByteFormat.string(totalCache), symbol: "internaldrive",
-                               detail: "\(ByteFormat.string(DiskSpace.freeBytes(at: drives.paths.cacheRoot.path))) free on this Mac")
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 16)], spacing: 16) {
+                    ForEach(drives.drives) { d in DriveCard(drive: d) }
                 }
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(drives.drives) { d in DriveSummaryCard(drive: d) }
-                }
-                HStack(alignment: .top, spacing: 12) {
-                    Card(title: "Transfers") {
-                        let active = drives.allActiveTransfers.prefix(5)
-                        if active.isEmpty {
-                            Text("No transfers in progress.").foregroundStyle(.secondary)
-                        } else {
-                            ForEach(Array(active)) { t in TransferRow(transfer: t, driveName: drives.drive(t.driveID)?.name ?? t.driveID) }
-                        }
-                    }
-                    Card(title: "Recent activity") {
-                        let events = drives.recentActivity.prefix(6)
-                        if events.isEmpty { Text("Nothing yet.").foregroundStyle(.secondary) }
-                        ForEach(Array(events), id: \.timestampID) { e in
-                            HStack(alignment: .firstTextBaseline) {
-                                Image(systemName: e.severity.symbol).foregroundStyle(e.severity.color).font(.caption)
-                                Text(e.message).font(.callout).lineLimit(2)
-                                Spacer()
-                                Text(e.timestamp.relative).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
+                HStack(alignment: .top, spacing: 16) {
+                    transfersCard
+                    activityCard
                 }
             }
-            .padding(24)
+            .padding(28)
+            .frame(maxWidth: 1100, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
-        .navigationTitle("Dashboard")
+        .navigationTitle("Overview")
         .toolbar {
             ToolbarItemGroup {
-                Button { Task { await drives.mountAll() } } label: { Label("Mount All", systemImage: "play.circle") }
+                Button { Task { await drives.mountAll() } } label: { Image(systemName: "play.circle") }
                     .help("Mount every connected drive")
-                Button { Task { await drives.unmountAll(waitForUploads: true) } } label: { Label("Unmount All", systemImage: "eject") }
-                    .help("Unmount every drive after pending uploads finish")
-                Button { Task { await drives.refreshAll() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                Button { Task { await drives.unmountAll(waitForUploads: true) } } label: { Image(systemName: "eject") }
+                    .help("Eject every drive after uploads finish")
+                Button { Task { await drives.refreshAll() } } label: { Image(systemName: "arrow.clockwise") }
+                    .help("Refresh")
             }
         }
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: drives.overallHealth == .healthy ? "checkmark.circle.fill" : drives.overallHealth == .inactive ? "circle.dashed" : "exclamationmark.circle.fill")
-                .font(.system(size: 30)).foregroundStyle(drives.overallHealth.color)
-            VStack(alignment: .leading) {
-                Text(headline).font(.title2.weight(.semibold))
+        HStack(alignment: .center, spacing: 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous).fill(drives.overallHealth.color.opacity(0.14)).frame(width: 56, height: 56)
+                Image(systemName: headerSymbol).font(.system(size: 26, weight: .semibold)).foregroundStyle(drives.overallHealth.color)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(headline).font(.title.weight(.semibold))
                 Text("Your storage. One native experience.").foregroundStyle(.secondary)
             }
+            Spacer()
+            HStack(spacing: 10) {
+                Pill(text: "\(drives.connectedCount) of \(drives.drives.count) connected", color: drives.connectedCount > 0 ? .green : .secondary)
+                Pill(text: "\(ByteFormat.string(totalCache)) cached")
+            }
+        }
+    }
+
+    private var headerSymbol: String {
+        switch drives.overallHealth {
+        case .healthy: "checkmark"
+        case .inactive: "externaldrive"
+        default: "exclamationmark"
         }
     }
 
     private var headline: String {
         switch drives.overallHealth {
-        case .healthy: "All drives are working"
+        case .healthy: "Everything is in sync"
         case .degraded: "Some drives need a moment"
         case .error: "A drive needs attention"
-        case .inactive: drives.connectedCount == 0 ? "Connect a drive to get started" : "No drives mounted"
+        case .inactive: drives.connectedCount == 0 ? "Connect a drive to begin" : "No drives mounted"
         }
     }
 
     @ViewBuilder private var warnings: some View {
         if let deps = drives.dependencies, deps.rclone == nil {
             ErrorBanner(error: .dependencyMissing(.rclone, detail: "Ekthar Drive uses rclone to talk to your storage. Install it in Settings > Advanced."),
-                        actions: [("Open Advanced Settings", { model.selection = .advanced })])
+                        actions: [("Open Settings", { AppActions.openSettings(.advanced, model: model) })])
         }
-        if !drives.isOnline {
-            ErrorBanner(error: .networkUnavailable)
-        }
+        if !drives.isOnline { ErrorBanner(error: .networkUnavailable) }
         if let w = drives.diskWarning {
             ErrorBanner(error: .localDiskFull(freeBytes: w.freeBytes), actions: [("Manage Cache", { model.selection = .cache })])
         }
-        if let e = model.fatalError ?? drives.startupError {
-            ErrorBanner(error: .unknown(e))
+        if let e = model.fatalError ?? drives.startupError { ErrorBanner(error: .unknown(e)) }
+    }
+
+    private var transfersCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Transfers").font(.headline)
+                Spacer()
+                Button("See All") { model.selection = .transfers }.buttonStyle(.link)
+            }
+            let active = drives.allActiveTransfers.prefix(5)
+            if active.isEmpty {
+                Label("No transfers in progress", systemImage: "checkmark.circle").foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(active)) { t in TransferRow(transfer: t, driveName: drives.drive(t.driveID)?.name ?? t.driveID) }
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .premiumCard()
+    }
+
+    private var activityCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Recent activity").font(.headline)
+                Spacer()
+                Button("See All") { model.selection = .activity }.buttonStyle(.link)
+            }
+            let events = drives.recentActivity.prefix(6)
+            if events.isEmpty { Text("Nothing yet.").foregroundStyle(.secondary) }
+            ForEach(Array(events), id: \.timestampID) { e in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: e.severity.symbol).foregroundStyle(e.severity.color).font(.caption)
+                    Text(e.message).font(.callout).lineLimit(2)
+                    Spacer()
+                    Text(e.timestamp.relative).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .premiumCard()
     }
 
     private var totalCache: Int64 { drives.drives.compactMap { drives.state($0.id).cache?.bytesUsed }.reduce(0, +) }
-    private var pendingDetail: String? {
-        let pending = drives.drives.compactMap { drives.state($0.id).cache?.pendingUploads }.reduce(0, +)
-        return pending > 0 ? "\(pending) upload\(pending == 1 ? "" : "s") pending" : nil
-    }
 }
 
-struct DriveSummaryCard: View {
+/// Large drive card: icon tile, status, capacity ring, and the one action that matters right now.
+struct DriveCard: View {
     @Environment(AppModel.self) private var model
     @Environment(DriveManager.self) private var drives
     let drive: DriveConfiguration
+    @State private var hovering = false
 
     var body: some View {
         let rt = drives.state(drive.id)
-        Button { model.selection = .drive(drive.id) } label: {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Image(systemName: drive.provider.symbol).font(.title2).foregroundStyle(.tint)
-                    VStack(alignment: .leading) {
-                        Text(drive.name).font(.headline)
-                        StatusLabel(text: rt.phase.isActive || rt.phase != .unmounted ? rt.phase.label : rt.connection.label, health: rt.health)
-                            .font(.caption)
-                    }
-                    Spacer()
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 14) {
+                DriveIconTile(provider: drive.provider, size: 48)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(drive.name).font(.title3.weight(.semibold))
+                    StatusLabel(text: rt.phase == .unmounted ? rt.connection.label : rt.phase.label, health: rt.health).font(.callout)
                 }
-                CapacityView(usage: rt.usage, compact: true)
-                HStack {
-                    Label(ByteFormat.string(rt.cache?.bytesUsed), systemImage: "internaldrive")
-                    Spacer()
-                    if let p = rt.mountPath, rt.phase.isActive { Text(p).lineLimit(1).truncationMode(.middle) }
-                }
-                .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                CapacityRing(usage: rt.usage, size: 58, lineWidth: 6)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-            .contentShape(RoundedRectangle(cornerRadius: 12))
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Available").font(.caption).foregroundStyle(.secondary)
+                    Text(ByteFormat.string(rt.usage?.free)).font(.headline).monospacedDigit()
+                }
+                Spacer()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Cache").font(.caption).foregroundStyle(.secondary)
+                    Text(ByteFormat.string(rt.cache?.bytesUsed)).font(.headline).monospacedDigit()
+                }
+                Spacer()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Uploading").font(.caption).foregroundStyle(.secondary)
+                    Text("\(rt.cache?.pendingUploads ?? 0)").font(.headline).monospacedDigit()
+                }
+            }
+            HStack {
+                Button { model.selection = .drive(drive.id) } label: {
+                    Label(rt.phase.isActive ? "Browse" : "Open", systemImage: "folder").frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                if rt.phase.isActive {
+                    Button { Task { await drives.unmount(drive.id, waitForUploads: false) } } label: {
+                        Label("Eject", systemImage: "eject").frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                } else if rt.connection.isConfigured {
+                    Button { Task { await drives.mount(drive.id) } } label: {
+                        Label("Mount", systemImage: "play.fill").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .disabled(rt.phase == .mounting)
+                }
+            }
         }
-        .buttonStyle(.plain)
+        .premiumCard(radius: 20, padding: 20)
+        .scaleEffect(hovering ? 1.01 : 1)
+        .animation(.easeOut(duration: 0.15), value: hovering)
+        .onHover { hovering = $0 }
     }
 }
 

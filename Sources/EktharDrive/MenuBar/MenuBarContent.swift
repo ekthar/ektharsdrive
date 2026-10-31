@@ -51,7 +51,7 @@ struct MenuBarContent: View {
             .disabled(!drives.drives.contains { drives.state($0.id).connection.isConfigured && !drives.state($0.id).phase.isActive })
         Button("Unmount All") { Task { await drives.unmountAll(waitForUploads: true) } }
             .disabled(!drives.drives.contains { drives.state($0.id).phase.isActive })
-        Button("Settings…") { model.selection = .general; AppActions.openDashboard() }
+        SettingsLink { Text("Settings…") }
             .keyboardShortcut(",")
         Divider()
         Button("Quit Ekthar Drive") { NSApp.terminate(nil) }

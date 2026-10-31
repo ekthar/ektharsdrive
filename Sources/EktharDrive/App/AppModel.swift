@@ -11,7 +11,17 @@ final class AppModel {
     let drives: DriveManager
     let loginItems = LoginItemController()
     var selection: SidebarItem? = .dashboard
+    var settingsTab: SettingsTab = .accounts
     var showSetup = false
+    @ObservationIgnored private var browsers: [String: FileBrowserModel] = [:]
+
+    /// One browser per drive so location and history survive switching drives.
+    func browser(for driveID: String) -> FileBrowserModel {
+        if let b = browsers[driveID] { return b }
+        let b = FileBrowserModel(driveID: driveID)
+        browsers[driveID] = b
+        return b
+    }
     var fatalError: String?
 
     init() {
@@ -56,7 +66,6 @@ enum SidebarItem: Hashable {
     case dashboard
     case drive(String)
     case transfers, cache, activity
-    case accounts, general, advanced, about
 }
 
 /// Launch at login through SMAppService (macOS 13+). Works for the bundled app; reports why when it cannot.
