@@ -146,6 +146,15 @@ public final class DriveManager {
         }
     }
 
+    public func installRclone(progress: @escaping @Sendable (String) -> Void) async throws(DriveError) {
+        let bin = try await RcloneInstaller.install(into: paths.binDirectory, progress: progress)
+        var s = settings
+        s.rclonePath = bin.url.path
+        saveSettings(s)
+        await refreshDependencies()
+        log(nil, "dependency", "Installed rclone \(bin.version) at \(bin.url.path).", .info)
+    }
+
     public func refreshDependencies() async {
         dependencies = await DependencyChecker.check(paths: paths, configuredRclone: settings.rclonePath)
     }
