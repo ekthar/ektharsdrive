@@ -14,8 +14,19 @@ public struct MountGlobals: Sendable, Equatable {
         self.macFUSEUsesFSKit = macFUSEUsesFSKit
     }
 
+    /// FSKit only on macOS 26+ and only when the macFUSE kernel extension is not loaded. When the user has
+    /// allowed the kernel extension, it is the one that works; asking for FSKit then fails because macFUSE's
+    /// FSKit module is a separate switch in System Settings.
     public static var fskitPreferred: Bool {
         ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0))
+            && !macFUSEKernelLoaded
+    }
+
+    /// The macFUSE kernel extension registers `vfs.generic.macfuse.*` sysctls once it is loaded.
+    public static var macFUSEKernelLoaded: Bool {
+        var value: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        return sysctlbyname("vfs.generic.macfuse.control.tunables_initialized", &value, &size, nil, 0) == 0
     }
 
     public static let allowedLogLevels = ["DEBUG", "INFO", "NOTICE", "ERROR"]
