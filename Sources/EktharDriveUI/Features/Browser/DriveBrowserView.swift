@@ -8,9 +8,6 @@ struct DriveBrowserView: View {
     @Environment(DriveManager.self) private var drives
     @Bindable var browser: FileBrowserModel
 
-    @State private var renaming: FileItem?
-    @State private var newName = ""
-    @State private var pendingDelete: [URL] = []
     @State private var dropTargeted = false
 
     var body: some View {
@@ -37,8 +34,10 @@ struct DriveBrowserView: View {
             .navigationSubtitle(rt.phase.isActive ? (browser.loading && browser.items.isEmpty ? "Loading…" : "\(browser.visibleItems.count) items") : rt.connection.label)
             .searchable(text: $browser.search, placement: .toolbar, prompt: "Search \(browser.current?.lastPathComponent ?? d.name)")
             .toolbar { toolbar(d, rt) }
+            .focusedSceneValue(\.activeBrowser, rt.phase.isActive ? browser : nil)
             .quickLookPreview($browser.quickLookURL)
             .onKeyPress(.space) { browser.toggleQuickLook(); return .handled }
+            .onKeyPress(.return) { guard browser.singleSelected != nil else { return .ignored }; browser.requestRename(); return .handled }
             .overlay(alignment: .bottom) {
                 if let toast = browser.toast {
                     Text(toast)
@@ -59,13 +58,13 @@ struct DriveBrowserView: View {
             .task(id: "\(rt.phase.isActive)|\(rt.mountPath ?? "")") {
                 await browser.attach(mountPath: rt.phase.isActive ? rt.mountPath : nil)
             }
-            .alert("Rename", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-                TextField("Name", text: $newName)
-                Button("Rename") { if let item = renaming { Task { await browser.rename(item, to: newName) } } }
+            .alert("Rename", isPresented: Binding(get: { browser.renameTarget != nil }, set: { if !$0 { browser.renameTarget = nil } })) {
+                TextField("Name", text: $browser.renameText)
+                Button("Rename") { if let item = browser.renameTarget { let name = browser.renameText; Task { await browser.rename(item, to: name) } } }
                 Button("Cancel", role: .cancel) {}
             }
-            .confirmationDialog(deleteTitle, isPresented: Binding(get: { !pendingDelete.isEmpty }, set: { if !$0 { pendingDelete = [] } })) {
-                Button("Delete", role: .destructive) { let urls = pendingDelete; Task { await browser.delete(urls) } }
+            .confirmationDialog(deleteTitle, isPresented: Binding(get: { !browser.deleteTargets.isEmpty }, set: { if !$0 { browser.deleteTargets = [] } })) {
+                Button("Delete", role: .destructive) { let urls = browser.deleteTargets; Task { await browser.delete(urls) } }
             } message: {
                 Text(d.provider == .googleDrive
                      ? "Items go to the trash in your Google Drive, where you can restore them for 30 days."
@@ -75,7 +74,7 @@ struct DriveBrowserView: View {
     }
 
     private var deleteTitle: String {
-        pendingDelete.count == 1 ? "Delete “\(pendingDelete[0].lastPathComponent)”?" : "Delete \(pendingDelete.count) items?"
+        browser.deleteTargets.count == 1 ? "Delete “\(browser.deleteTargets[0].lastPathComponent)”?" : "Delete \(browser.deleteTargets.count) items?"
     }
 
     @ViewBuilder
@@ -121,8 +120,8 @@ struct DriveBrowserView: View {
 
     private var actions: FileActions {
         FileActions(
-            rename: { item in newName = item.name; renaming = item },
-            delete: { urls in pendingDelete = urls },
+            rename: { item in browser.requestRename(item) },
+            delete: { urls in browser.requestDelete(urls) },
             download: { urls in Task { await browser.download(urls) } })
     }
 
@@ -130,9 +129,9 @@ struct DriveBrowserView: View {
     private func toolbar(_ d: DriveConfiguration, _ rt: DriveRuntime) -> some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
             ControlGroup {
-                Button { browser.goBack() } label: { Image(systemName: "chevron.left") }
+                Button { browser.goBack() } label: { Label("Back", systemImage: "chevron.left").labelStyle(.iconOnly) }
                     .disabled(!browser.canGoBack).help("Back")
-                Button { browser.goForward() } label: { Image(systemName: "chevron.right") }
+                Button { browser.goForward() } label: { Label("Forward", systemImage: "chevron.right").labelStyle(.iconOnly) }
                     .disabled(!browser.canGoForward).help("Forward")
             }
             .controlGroupStyle(.navigation)
@@ -140,8 +139,8 @@ struct DriveBrowserView: View {
         ToolbarItemGroup(placement: .primaryAction) {
             if rt.phase.isActive {
                 Picker("View", selection: $browser.viewMode) {
-                    Image(systemName: "square.grid.2x2").tag(BrowserViewMode.icons).help("Icons")
-                    Image(systemName: "list.bullet").tag(BrowserViewMode.list).help("List")
+                    Label("Icons", systemImage: "square.grid.2x2").labelStyle(.iconOnly).tag(BrowserViewMode.icons).help("Icons")
+                    Label("List", systemImage: "list.bullet").labelStyle(.iconOnly).tag(BrowserViewMode.list).help("List")
                 }
                 .pickerStyle(.segmented)
                 Menu {
@@ -153,7 +152,7 @@ struct DriveBrowserView: View {
                     }
                     Divider()
                     Toggle("Ascending", isOn: $browser.ascending)
-                } label: { Image(systemName: "arrow.up.arrow.down") }
+                } label: { Label("Sort", systemImage: "arrow.up.arrow.down").labelStyle(.iconOnly) }
                 .help("Sort")
                 Menu {
                     Button("New Folder") { Task { await browser.newFolder() } }.keyboardShortcut("n", modifiers: [.command, .shift])
@@ -161,15 +160,15 @@ struct DriveBrowserView: View {
                     Divider()
                     Button("Reload") { Task { await browser.reload() } }.keyboardShortcut("r")
                     Button("Show in Finder") { AppActions.openInFinder(browser.current?.path) }
-                } label: { Image(systemName: "ellipsis.circle") }
+                } label: { Label("Actions", systemImage: "ellipsis.circle").labelStyle(.iconOnly) }
                 .help("Actions")
-                Button { Task { await drives.unmount(d.id, waitForUploads: false) } } label: { Image(systemName: "eject") }
+                Button { Task { await drives.unmount(d.id, waitForUploads: false) } } label: { Label("Eject", systemImage: "eject").labelStyle(.iconOnly) }
                     .help("Eject \(d.name)")
             } else if rt.connection.isConfigured {
                 Button { Task { await drives.mount(d.id) } } label: { Label("Mount", systemImage: "play.fill") }
                     .disabled(rt.phase == .mounting)
             }
-            Button { withAnimation(Theme.spring) { browser.toggleInspector() } } label: { Image(systemName: "sidebar.right") }
+            Button { withAnimation(Theme.spring) { browser.toggleInspector() } } label: { Label(browser.showInspector ? "Hide Info" : "Show Info", systemImage: "sidebar.right").labelStyle(.iconOnly) }
                 .help("Show or hide info")
         }
     }
@@ -230,7 +229,7 @@ struct FileTile: View {
                 .frame(width: 64, height: 64)
                 .clipped()
                 .shadow(color: .black.opacity(hovering ? 0.14 : 0), radius: 8, y: 5)
-                .scaleEffect(hovering && !selected ? 1.05 : 1)
+                
             VStack(spacing: 2) {
                 Text(item.name)
                     .font(.system(size: 12, weight: selected ? .semibold : .medium))

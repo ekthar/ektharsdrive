@@ -16,7 +16,7 @@ struct EktharDriveApp: App {
         .defaultSize(width: 1080, height: 720)
         .windowToolbarStyle(.unified)
         .commands {
-            CommandGroup(replacing: .newItem) {}
+            BrowserCommands()
             CommandMenu("Drives") {
                 Button("Mount All") { Task { await appDelegate.model.drives.mountAll() } }
                     .keyboardShortcut("m", modifiers: [.command, .shift])

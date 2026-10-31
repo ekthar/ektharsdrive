@@ -28,6 +28,26 @@ final class FileBrowserModel {
     private(set) var busyMessage: String?
     /// Short confirmation ("Link copied"), shown briefly.
     var toast: String?
+    /// Pending rename / delete confirmation, requested from a menu, shortcut or context menu.
+    var renameTarget: FileItem?
+    var renameText = ""
+    var deleteTargets: [URL] = []
+
+    var hasSelection: Bool { !selection.isEmpty }
+    var singleSelected: FileItem? { selection.count == 1 ? selectedItems.first : nil }
+
+    func requestRename(_ item: FileItem? = nil) {
+        guard let item = item ?? singleSelected else { return }
+        renameText = item.name
+        renameTarget = item
+    }
+
+    func requestDelete(_ urls: [URL]? = nil) {
+        let targets = urls ?? Array(selection)
+        if !targets.isEmpty { deleteTargets = targets }
+    }
+
+    func openSelection() { selectedItems.forEach(open) }
     /// The user's own choice; automatic hiding on narrow windows never overrides it.
     private var userWantsInspector = true
     private var autoHidden = false

@@ -8,26 +8,28 @@ import UniformTypeIdentifiers
 /// Colors, type, radii and motion for the whole app. Light-first: a white canvas, near-black ink,
 /// one indigo accent, soft layered shadows and hairline borders.
 public enum Theme {
-    // Surfaces
-    static let canvas = Color.white
-    static let surface = Color(red: 0.965, green: 0.969, blue: 0.976)       // #F6F7F9
-    static let surfaceSunken = Color(red: 0.945, green: 0.949, blue: 0.959) // #F1F2F5
-    static let hairline = Color.black.opacity(0.07)
-    static let hairlineStrong = Color.black.opacity(0.11)
+    // Every color adapts to light and dark. Text colors meet 4.5:1 on canvas and surface in both modes
+    // (measured: inkTertiary 4.83/4.51 light, 5.45/4.84 dark; warning 5.43, danger 4.83, success 5.69 light).
+    static let canvas = Color.adaptive(light: 0xFFFFFF, dark: 0x1C1D21)
+    static let surface = Color.adaptive(light: 0xF6F7F9, dark: 0x25272C)
+    static let surfaceSunken = Color.adaptive(light: 0xF1F2F5, dark: 0x2E3036)
+    static let hairline = Color.adaptive(light: 0x000000, lightAlpha: 0.07, dark: 0xFFFFFF, darkAlpha: 0.08)
+    static let hairlineStrong = Color.adaptive(light: 0x000000, lightAlpha: 0.11, dark: 0xFFFFFF, darkAlpha: 0.14)
 
     // Ink
-    static let ink = Color(red: 0.043, green: 0.051, blue: 0.071)          // #0B0D12
-    static let inkSecondary = Color(red: 0.357, green: 0.384, blue: 0.439) // #5B6270
-    static let inkTertiary = Color(red: 0.604, green: 0.631, blue: 0.678)  // #9AA1AD
+    static let ink = Color.adaptive(light: 0x0B0D12, dark: 0xF2F3F5)
+    static let inkSecondary = Color.adaptive(light: 0x5B6270, dark: 0xA9AFBA)
+    static let inkTertiary = Color.adaptive(light: 0x6B7280, dark: 0x8C93A0)
 
-    // Accent and states
-    static let accent = Color(red: 0.231, green: 0.357, blue: 0.992)       // #3B5BFD
+    // Accent and states. Button fills keep the light accent in both modes (white text 5.12:1).
+    static let accent = Color.adaptive(light: 0x3B5BFD, dark: 0x7C93FF)
+    static let accentFill = Color(red: 0.231, green: 0.357, blue: 0.992)   // #3B5BFD
     static let accentDeep = Color(red: 0.431, green: 0.278, blue: 1.0)     // #6E47FF
-    static let accentGradient = LinearGradient(colors: [accent, accentDeep], startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let accentSoft = accent.opacity(0.10)
-    static let success = Color(red: 0.071, green: 0.718, blue: 0.416)      // #12B76A
-    static let warning = Color(red: 0.969, green: 0.565, blue: 0.035)      // #F79009
-    static let danger = Color(red: 0.941, green: 0.267, blue: 0.220)       // #F04438
+    static let accentGradient = LinearGradient(colors: [accentFill, accentDeep], startPoint: .topLeading, endPoint: .bottomTrailing)
+    static let accentSoft = Color.adaptive(light: 0x3B5BFD, lightAlpha: 0.10, dark: 0x7C93FF, darkAlpha: 0.18)
+    static let success = Color.adaptive(light: 0x067647, dark: 0x47CD89)
+    static let warning = Color.adaptive(light: 0xB54708, dark: 0xFDB022)
+    static let danger = Color.adaptive(light: 0xD92D20, dark: 0xFF6B5E)
 
     // Shape
     static let cardRadius: CGFloat = 18
@@ -101,9 +103,10 @@ extension View {
 struct HoverLift: ViewModifier {
     let scale: CGFloat
     @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func body(content: Content) -> some View {
         content
-            .scaleEffect(hovering ? scale : 1)
+            .scaleEffect(hovering && !reduceMotion ? scale : 1)
             .shadow(color: .black.opacity(hovering ? 0.06 : 0), radius: 18, y: 10)
             .animation(Theme.snappy, value: hovering)
             .onHover { hovering = $0 }
@@ -230,6 +233,17 @@ extension ProviderKind {
 }
 
 extension Color {
+    /// A color that follows the system (or app) light/dark appearance.
+    static func adaptive(light: UInt32, lightAlpha: Double = 1, dark: UInt32, darkAlpha: Double = 1) -> Color {
+        func ns(_ hex: UInt32, _ a: Double) -> NSColor {
+            NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
+                    blue: CGFloat(hex & 0xFF) / 255, alpha: CGFloat(a))
+        }
+        return Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? ns(dark, darkAlpha) : ns(light, lightAlpha)
+        })
+    }
+
     /// Blend toward another color (0 = self, 1 = other).
     func mix(_ other: Color, _ amount: Double) -> Color {
         let a = NSColor(self).usingColorSpace(.sRGB) ?? .black
@@ -247,6 +261,7 @@ struct CapacityRing: View {
     var size: CGFloat = 64
     var lineWidth: CGFloat = 7
     @State private var drawn: Double = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let fraction = usage?.usedFraction
@@ -272,8 +287,10 @@ struct CapacityRing: View {
             }
         }
         .frame(width: size, height: size)
-        .onAppear { withAnimation(.spring(response: 0.9, dampingFraction: 0.85).delay(0.1)) { drawn = fraction ?? 0 } }
-        .onChange(of: fraction) { _, new in withAnimation(Theme.spring) { drawn = new ?? 0 } }
+        .onAppear {
+            if reduceMotion { drawn = fraction ?? 0 } else { withAnimation(.spring(response: 0.9, dampingFraction: 0.85).delay(0.1)) { drawn = fraction ?? 0 } }
+        }
+        .onChange(of: fraction) { _, new in withAnimation(reduceMotion ? nil : Theme.spring) { drawn = new ?? 0 } }
         .accessibilityLabel(fraction.map { "\(Int($0 * 100)) percent used" } ?? "Capacity unavailable")
     }
 
@@ -289,6 +306,7 @@ struct CapacityBar: View {
     let fraction: Double?
     var height: CGFloat = 5
     @State private var drawn: Double = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geo in
@@ -300,8 +318,10 @@ struct CapacityBar: View {
             }
         }
         .frame(height: height)
-        .onAppear { withAnimation(.spring(response: 0.8, dampingFraction: 0.85).delay(0.1)) { drawn = fraction ?? 0 } }
-        .onChange(of: fraction) { _, new in withAnimation(Theme.spring) { drawn = new ?? 0 } }
+        .onAppear {
+            if reduceMotion { drawn = fraction ?? 0 } else { withAnimation(.spring(response: 0.8, dampingFraction: 0.85).delay(0.1)) { drawn = fraction ?? 0 } }
+        }
+        .onChange(of: fraction) { _, new in withAnimation(reduceMotion ? nil : Theme.spring) { drawn = new ?? 0 } }
     }
 
     private var fill: LinearGradient {
@@ -330,7 +350,12 @@ struct Pill: View {
 /// Moving highlight for loading placeholders.
 struct Shimmer: ViewModifier {
     @State private var phase: CGFloat = -1
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func body(content: Content) -> some View {
+        if reduceMotion { content } else { moving(content) }
+    }
+
+    private func moving(_ content: Content) -> some View {
         content
             .overlay {
                 GeometryReader { g in

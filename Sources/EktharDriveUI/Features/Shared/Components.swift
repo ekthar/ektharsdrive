@@ -47,6 +47,7 @@ struct StatusDot: View {
     let health: HealthLevel
     var pulsing = false
     @State private var pulse = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -58,7 +59,8 @@ struct StatusDot: View {
             Circle().fill(health.color).frame(width: 7, height: 7)
         }
         .frame(width: 14, height: 14)
-        .onAppear { if pulsing { withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) { pulse = true } } }
+        .onAppear { if pulsing && !reduceMotion { withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) { pulse = true } } }
+        .help(health.label)
         .accessibilityLabel(health.label)
     }
 }
@@ -254,6 +256,7 @@ struct EmptyStateArt: View {
     let symbol: String
     var tint: Color = Theme.accent
     @State private var float = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -266,7 +269,7 @@ struct EmptyStateArt: View {
             Image(systemName: symbol).font(.system(size: 36, weight: .medium)).foregroundStyle(tint.gradient)
         }
         .offset(y: float ? -4 : 2)
-        .onAppear { withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) { float = true } }
+        .onAppear { if !reduceMotion { withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) { float = true } } }
     }
 }
 

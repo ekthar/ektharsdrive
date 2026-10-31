@@ -11,7 +11,8 @@ try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: t
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
-NSApp.appearance = NSAppearance(named: .aqua)
+let darkMode = CommandLine.arguments.contains("--dark")
+NSApp.appearance = NSAppearance(named: darkMode ? .darkAqua : .aqua)
 
 @MainActor
 func makeSampleFolder(_ root: URL) {
@@ -60,7 +61,7 @@ Task { @MainActor in
     let db = try! AppDatabase(url: paths.databaseURL)
     var settings = AppSettings()
     settings.setupCompleted = true
-    settings.theme = .light
+    settings.theme = darkMode ? .dark : .light
     try? db.setSetting("app", String(decoding: try! JSONEncoder().encode(settings), as: UTF8.self))
     try? db.setSetting("ui.whiteTheme", "1")
     let drives = DriveManager(paths: paths, secrets: InMemorySecretStore(), database: db)

@@ -157,6 +157,7 @@ struct DashboardView: View {
 struct HealthBadge: View {
     let level: HealthLevel
     @State private var breathe = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -166,7 +167,9 @@ struct HealthBadge: View {
             Image(systemName: symbol).font(.system(size: 22, weight: .semibold)).foregroundStyle(level.color.gradient)
                 .contentTransition(.symbolEffect(.replace))
         }
-        .onAppear { withAnimation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true)) { breathe = true } }
+        .onAppear { if !reduceMotion { withAnimation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true)) { breathe = true } } }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Overall status: \(level.label)")
     }
 
     private var symbol: String {
