@@ -188,7 +188,7 @@ public enum FileBrowsing {
         var crumbs: [(String, URL)] = [(rootName, root)]
         var current = root
         for part in rel {
-            current = current.appendingPathComponent(part)
+            current = current.appendingPathComponent(part, isDirectory: true)
             crumbs.append((part, current))
         }
         return crumbs

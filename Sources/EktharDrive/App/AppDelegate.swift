@@ -118,6 +118,6 @@ enum AppActions {
 
     static func openInFinder(_ path: String?) {
         guard let path, MountTable.isMounted(path) else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path, isDirectory: true)])
     }
 }

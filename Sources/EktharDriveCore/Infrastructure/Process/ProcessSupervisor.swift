@@ -37,6 +37,57 @@ final class ProcessHandle: @unchecked Sendable {
     }
 }
 
+/// Follows a growing log file and calls `onLine` for each complete line. Polls every 250 ms (cheap: one
+/// read of new bytes). The file is 0600 in the app's 0700 logs folder.
+final class LogTailer: @unchecked Sendable {
+    private let url: URL
+    private let onLine: @Sendable (String) -> Void
+    private let queue = DispatchQueue(label: "com.ekthar.drive.logtail")
+    private var handle: FileHandle?
+    private var buffer = Data()
+    private var timer: DispatchSourceTimer?
+
+    init(url: URL, onLine: @escaping @Sendable (String) -> Void) {
+        self.url = url
+        self.onLine = onLine
+    }
+
+    func start() {
+        queue.async { [self] in
+            handle = FileHandle(forReadingAtPath: url.path)
+            let t = DispatchSource.makeTimerSource(queue: queue)
+            t.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(250))
+            t.setEventHandler { [weak self] in self?.readNew() }
+            t.resume()
+            timer = t
+        }
+    }
+
+    func stop(drain: Bool) {
+        queue.sync {
+            if drain { readNew(flushPartial: true) }
+            timer?.cancel()
+            timer = nil
+            try? handle?.close()
+            handle = nil
+        }
+    }
+
+    private func readNew(flushPartial: Bool = false) {
+        guard let handle, let data = try? handle.readToEnd(), !data.isEmpty || flushPartial else { return }
+        buffer.append(data)
+        while let nl = buffer.firstIndex(of: 0x0A) {
+            let line = String(decoding: buffer[buffer.startIndex..<nl], as: UTF8.self)
+            buffer.removeSubrange(buffer.startIndex...nl)
+            if !line.isEmpty { onLine(line) }
+        }
+        if flushPartial, !buffer.isEmpty {
+            onLine(String(decoding: buffer, as: UTF8.self))
+            buffer.removeAll()
+        }
+    }
+}
+
 /// Owns every long-running rclone process. Guarantees one process per drive, captures output,
 /// records PID files so a relaunched app can find (and adopt) processes that outlived it,
 /// and never sends SIGKILL.
@@ -47,7 +98,6 @@ public actor ProcessSupervisor {
     private let logger = AppLogger(category: "supervisor")
     private let continuation: AsyncStream<SupervisorEvent>.Continuation
     public nonisolated let events: AsyncStream<SupervisorEvent>
-    private var logFiles: [String: RotatingLogFile] = [:]
 
     public init(paths: AppPaths) {
         self.paths = paths
@@ -80,46 +130,33 @@ public actor ProcessSupervisor {
         process.arguments = arguments
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+        // rclone writes straight into a log FILE, never a pipe. With a pipe, quitting or crashing the app
+        // closes the read end and rclone dies of SIGPIPE on its next log line, which leaves a dead volume
+        // that freezes Finder. A file has no reader to lose, so mounts keep working after the app quits.
+        let logURL = paths.logFile(for: driveID)
+        let fm = FileManager.default
+        if fm.fileExists(atPath: logURL.path) {
+            let previous = logURL.appendingPathExtension("1")
+            try? fm.removeItem(at: previous)
+            try? fm.moveItem(at: logURL, to: previous)
+        }
+        fm.createFile(atPath: logURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
+        guard let logOut = FileHandle(forWritingAtPath: logURL.path) else {
+            throw .permissionDenied("Could not open the log file \(logURL.path).")
+        }
+        process.standardOutput = logOut
+        process.standardError = logOut
         let handle = ProcessHandle(process: process, driveID: driveID)
-        let logFile = logFiles[driveID] ?? RotatingLogFile(url: paths.logFile(for: driveID))
-        logFiles[driveID] = logFile
         let cont = continuation
-        let pending = Locked(Data())
-
-        pipe.fileHandleForReading.readabilityHandler = { fh in
-            let data = fh.availableData
-            guard !data.isEmpty else { return }
-            let lines: [String] = pending.withLock { buf in
-                buf.append(data)
-                var out: [String] = []
-                while let nl = buf.firstIndex(of: 0x0A) {
-                    let lineData = buf[buf.startIndex..<nl]
-                    buf.removeSubrange(buf.startIndex...nl)
-                    out.append(String(decoding: lineData, as: UTF8.self))
-                }
-                return out
-            }
-            for raw in lines where !raw.isEmpty {
-                let line = Redactor.redact(raw)
-                handle.record(line)
-                logFile.append(line)
-                cont.yield(.output(driveID: driveID, line: line))
-            }
+        let tailer = LogTailer(url: logURL) { raw in
+            let line = Redactor.redact(raw)
+            handle.record(line)
+            cont.yield(.output(driveID: driveID, line: line))
         }
 
         let pidFile = paths.pidFile(for: driveID)
         process.terminationHandler = { p in
-            pipe.fileHandleForReading.readabilityHandler = nil
-            let rest = pipe.fileHandleForReading.readDataToEndOfFile()
-            let tail = String(decoding: pending.current + rest, as: UTF8.self)
-            for raw in tail.split(whereSeparator: \.isNewline) {
-                let line = Redactor.redact(String(raw))
-                handle.record(line)
-                logFile.append(line)
-            }
+            tailer.stop(drain: true)
             try? FileManager.default.removeItem(at: pidFile)
             cont.yield(.exited(driveID: driveID, pid: p.processIdentifier, status: p.terminationStatus,
                                reason: p.terminationReason, recentOutput: handle.recentLines()))
@@ -128,9 +165,11 @@ public actor ProcessSupervisor {
         do {
             try process.run()
         } catch {
-            pipe.fileHandleForReading.readabilityHandler = nil
+            try? logOut.close()
             throw .unknown("Could not launch rclone: \(error.localizedDescription)")
         }
+        try? logOut.close() // the child keeps its own copy of the descriptor
+        tailer.start()
         handles[driveID] = handle
         let pid = process.processIdentifier
         let record = "\(pid)\n\(executable.path)\n"

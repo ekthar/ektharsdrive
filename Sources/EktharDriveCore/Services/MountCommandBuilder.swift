@@ -28,7 +28,7 @@ public enum MountPathResolver {
         if let explicit = drive.mountPath, !explicit.isEmpty { return explicit }
         switch engine {
         case .macFUSE, .automatic: return "/Volumes/\(drive.name)"
-        case .nfs: return home.appendingPathComponent("Volumes").appendingPathComponent(drive.name).path
+        case .nfs: return (home.path as NSString).appendingPathComponent("Volumes/\(drive.name)")
         }
     }
 }

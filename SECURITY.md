@@ -10,7 +10,8 @@
 | SSH server identity | `ssh-keyscan` fetches the host key, and you compare the SHA256 fingerprint with the server out of band. Only then is it written to the app's `known_hosts`. rclone runs with `known_hosts_file` and refuses mismatches (`knownhosts: key mismatch`). A mismatch never auto-retries and blocks auto-mount. |
 | rclone control API | Unix socket in a 0700 directory. No TCP listener, no password on the command line. |
 | NFS engine | rclone's NFS server binds to 127.0.0.1 only. |
-| Logs / activity / diagnostics | Every line passes through `Redactor` before it is written (tokens, `ya29.` / `1//` Google tokens, `GOCSPX-` secrets, private-key blocks, `key = value` secrets, secret flags and env vars, OAuth `code` / `state` query params). |
+| Activity / app log / diagnostics | Every line passes through `Redactor` before it is stored, shown or exported (tokens, `ya29.` / `1//` Google tokens, `GOCSPX-` secrets, private-key blocks, `key = value` secrets, secret flags and env vars, OAuth `code` / `state` query params). |
+| rclone's own log (`~/Library/Logs/EktharDrive/<drive>.log`) | Written by rclone directly (not through a pipe) so mounts survive the app quitting. File is 0600 in a 0700 folder. rclone itself does not log tokens at the log levels offered (DEBUG and below); never add `--dump` flags. Lines read back into the app are redacted. |
 | Child processes | Run with argv arrays (never a shell) and a minimal environment, so unrelated secrets in the app's environment are not inherited. |
 
 Restrictions also enforced in code: SFTP user `root` is refused, mount paths cannot be system directories or your home folder, remote paths cannot contain `..`, and no temporary files hold secrets.

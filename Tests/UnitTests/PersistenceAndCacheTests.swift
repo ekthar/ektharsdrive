@@ -314,6 +314,40 @@ func makeTempDir(_ name: String = "t") throws -> URL {
         #expect(!FileManager.default.fileExists(atPath: paths.pidFile(for: "d").path), "pid file removed on exit")
     }
 
+    /// A supervised process must not depend on the app being alive to read its output. Before, rclone wrote
+    /// to a pipe; when the app quit, rclone died of SIGPIPE and left a dead volume that froze Finder.
+    @Test func childOutputGoesToPrivateLogFileNotAPipe() async throws {
+        let root = try makeTempDir("sup")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = AppPaths(supportDirectory: root.appendingPathComponent("s"), cacheRoot: root.appendingPathComponent("c"), logsDirectory: root.appendingPathComponent("l"))
+        try paths.prepare()
+        let sup = ProcessSupervisor(paths: paths)
+        let pid = try await sup.launch(driveID: "d", executable: URL(fileURLWithPath: "/bin/sh"),
+                                       arguments: ["-c", "echo one; sleep 1; echo two; sleep 30"], environment: SafeEnvironment.base())
+        for _ in 0..<40 where !(await sup.recentOutput(for: "d").contains("two")) { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(await sup.recentOutput(for: "d") == ["one", "two"], "lines are tailed from the file")
+        #expect(FilePermissions.mode(of: paths.logFile(for: "d").path) == 0o600)
+        let fd = Self.stdoutTarget(pid)
+        #expect(fd == paths.logFile(for: "d").path, "child stdout is the log file, got \(fd ?? "nil")")
+        await sup.terminate("d")
+        #expect(await sup.waitForExit("d", timeout: .seconds(5)))
+    }
+
+    /// Path of a process's stdout, via lsof (read-only).
+    static func stdoutTarget(_ pid: Int32) -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        p.arguments = ["-a", "-p", String(pid), "-d", "1", "-Fn"]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        try? p.run()
+        p.waitUntilExit()
+        let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        return text.split(separator: "\n").first { $0.hasPrefix("n") }.map { String($0.dropFirst()) }
+            .map { $0.hasPrefix("/private/") ? String($0.dropFirst("/private".count)) : $0 }
+    }
+
     @Test func staleOrUnrelatedPidFilesAreNotAdopted() async throws {
         let root = try makeTempDir("sup")
         defer { try? FileManager.default.removeItem(at: root) }
