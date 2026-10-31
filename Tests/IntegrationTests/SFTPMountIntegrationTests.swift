@@ -253,6 +253,11 @@ struct SFTPMountIntegrationTests {
             let cache = try #require(m.state("oracle").cache)
             #expect(cache.source == .liveProcess && cache.bytesUsed > 0)
 
+            // File locks must work, or sandboxed apps like Preview refuse to open files ("no permission").
+            let lockFD = open(mnt.appendingPathComponent("after.txt").path, O_RDONLY | O_SHLOCK | O_NONBLOCK)
+            #expect(lockFD >= 0, "O_SHLOCK failed: \(String(cString: strerror(errno)))")
+            if lockFD >= 0 { close(lockFD) }
+
             // Pending-write protection: a fresh write is held for write-back (3s); unmount must refuse.
             try Data("last minute".utf8).write(to: mnt.appendingPathComponent("pending.txt"))
             try await Task.sleep(for: .milliseconds(300))

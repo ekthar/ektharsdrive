@@ -36,23 +36,27 @@ public enum MountPathResolver {
 /// Builds the rclone argv for a mount. Pure function: every flag here was validated against rclone 1.75 `mount --help`.
 /// Secrets never appear in arguments (the config password travels via environment).
 public enum MountCommandBuilder {
+    /// For `.nfs`, rclone only SERVES NFS on `127.0.0.1:nfsPort`; the app mounts it with `mount_nfs`
+    /// (see `nfsMountArguments`) so it can choose options rclone's own `nfsmount` does not expose.
     public static func arguments(drive: DriveConfiguration, engine: MountEngine, mountPath: String, cacheDirectory: String,
-                                 rcSocket: String, configPath: String, globals: MountGlobals) throws(DriveError) -> [String] {
+                                 rcSocket: String, configPath: String, globals: MountGlobals, nfsPort: Int? = nil) throws(DriveError) -> [String] {
         try drive.validate()
         guard MountGlobals.allowedLogLevels.contains(globals.logLevel) else {
             throw .invalidConfiguration("Unsupported log level \(globals.logLevel).")
         }
-        let subcommand: String
-        switch engine {
-        case .macFUSE: subcommand = "mount"
-        case .nfs: subcommand = "nfsmount"
-        case .automatic: throw .invalidConfiguration("Mount engine must be resolved before building arguments.")
-        }
         let c = drive.cache
-        var args: [String] = [
-            subcommand, drive.remoteSpec, mountPath,
+        var args: [String]
+        switch engine {
+        case .macFUSE:
+            args = ["mount", drive.remoteSpec, mountPath, "--volname", drive.name, "--attr-timeout", "5s"]
+        case .nfs:
+            guard let nfsPort, (1024...65535).contains(nfsPort) else { throw .invalidConfiguration("No local port for the NFS server.") }
+            args = ["serve", "nfs", drive.remoteSpec, "--addr", "127.0.0.1:\(nfsPort)"]
+        case .automatic:
+            throw .invalidConfiguration("Mount engine must be resolved before building arguments.")
+        }
+        args += [
             "--config", configPath,
-            "--volname", drive.name,
             "--cache-dir", cacheDirectory,
             "--vfs-cache-mode", "full",
             "--vfs-cache-max-size", ByteFormat.rcloneSize(c.maxSizeBytes),
@@ -69,8 +73,6 @@ public enum MountCommandBuilder {
             // Finder previews and quick peeks then cost a few MB instead of 128 MB (rclone's default).
             "--vfs-read-chunk-size", "8M",
             "--vfs-read-chunk-size-limit", "256M",
-            // Re-use file attributes for a few seconds so Finder's many stat calls do not each hit the VFS.
-            "--attr-timeout", "5s",
         ]
         if drive.provider.supportsChangePolling { args += ["--poll-interval", "1m"] }
         if engine == .nfs {
@@ -83,5 +85,37 @@ public enum MountCommandBuilder {
             if globals.macFUSEUsesFSKit { args += ["-o", "backend=fskit"] }
         }
         return args
+    }
+
+    /// `mount_nfs` options for the local rclone NFS server.
+    /// - `locallocks`: file locks are kept by macOS. rclone's server has no lock service, so without this every
+    ///   lock fails with ENOLCK and sandboxed apps (Preview, TextEdit, Pages) report "you don't have permission".
+    /// - `nfc`: Unicode file names match what Finder expects.
+    /// - `rsize/wsize 1 MB`, `readahead=16`: far fewer round trips for large files.
+    /// - `intr`: a stuck read can be interrupted instead of hanging the app.
+    public static func nfsMountOptions(port: Int) -> String {
+        "port=\(port),mountport=\(port),tcp,vers=3,locallocks,nfc,intr,rsize=1048576,wsize=1048576,readahead=16"
+    }
+
+    public static func nfsMountArguments(port: Int, mountPath: String) -> [String] {
+        ["-o", nfsMountOptions(port: port), "localhost:/", mountPath]
+    }
+
+    /// A free TCP port on 127.0.0.1 (asks the kernel, then releases it for rclone).
+    public static func freeLocalPort() -> Int? {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let bound = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        guard bound == 0 else { return nil }
+        var out = sockaddr_in()
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let got = withUnsafeMutablePointer(to: &out) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) } }
+        guard got == 0 else { return nil }
+        return Int(UInt16(bigEndian: out.sin_port))
     }
 }

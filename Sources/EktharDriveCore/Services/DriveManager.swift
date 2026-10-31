@@ -446,6 +446,10 @@ public final class DriveManager {
                 return // the mount attempt (or a pending retry) already handles this failure
             }
             finishStopped(id)
+            if let p = state(id).mountPath, let rclone = rcloneService {
+                // rclone serving NFS died: the volume would hang Finder. Remove it before retrying.
+                Task { await MountManager(paths: paths, supervisor: supervisor, rcloneURL: rclone.binary.url).removeStaleNFSMount(p) }
+            }
             let error: DriveError = {
                 let classified = ErrorClassifier.classify(output: recent, exitCode: status, host: d.name)
                 if case .processExited = classified, status == 0 {

@@ -58,7 +58,7 @@ import Testing
 
     func args(_ d: DriveConfiguration, _ e: MountEngine, globals: MountGlobals = MountGlobals()) throws -> [String] {
         try MountCommandBuilder.arguments(drive: d, engine: e, mountPath: "/Volumes/\(d.name)", cacheDirectory: common.cache,
-                                          rcSocket: common.socket, configPath: common.config, globals: globals)
+                                          rcSocket: common.socket, configPath: common.config, globals: globals, nfsPort: 47000)
     }
 
     func value(_ args: [String], _ flag: String) -> String? {
@@ -86,7 +86,7 @@ import Testing
         let g = try args(.googleDefault, .nfs)
         #expect(value(g, "--vfs-read-chunk-size") == "8M")
         #expect(value(g, "--vfs-read-chunk-size-limit") == "256M")
-        #expect(value(g, "--attr-timeout") == "5s")
+        #expect(value(try args(.googleDefault, .macFUSE), "--attr-timeout") == "5s")
         #expect(value(g, "--dir-cache-time") == "1440m", "Google keeps listings; polling catches changes")
         #expect(value(try args(.oracleDefault, .nfs), "--dir-cache-time") == "5m", "SFTP has no change feed")
     }
@@ -116,7 +116,18 @@ import Testing
 
     @Test func oracleNFSArguments() throws {
         let a = try args(.oracleDefault, .nfs)
-        #expect(Array(a.prefix(2)) == ["nfsmount", "oracle:/srv/ekthar-drive/files"])
+        #expect(Array(a.prefix(5)) == ["serve", "nfs", "oracle:/srv/ekthar-drive/files", "--addr", "127.0.0.1:47000"], "loopback only")
+        #expect(throws: DriveError.self) {
+            try MountCommandBuilder.arguments(drive: .oracleDefault, engine: .nfs, mountPath: "/m", cacheDirectory: "/c",
+                                              rcSocket: "/s", configPath: "/k", globals: MountGlobals(), nfsPort: nil)
+        }
+        let opts = MountCommandBuilder.nfsMountOptions(port: 47000)
+        for o in ["locallocks", "nfc", "tcp", "vers=3", "rsize=1048576", "port=47000", "mountport=47000"] {
+            #expect(opts.split(separator: ",").contains(Substring(o)), "missing \(o)")
+        }
+        #expect(MountCommandBuilder.nfsMountArguments(port: 47000, mountPath: "/m").suffix(2) == ["localhost:/", "/m"])
+        let port = try #require(MountCommandBuilder.freeLocalPort())
+        #expect(port >= 1024)
         #expect(value(a, "--vfs-cache-max-size") == "4G")
         #expect(value(a, "--buffer-size") == "16M")
         #expect(!a.contains("--poll-interval"), "SFTP has no change notifications")

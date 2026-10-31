@@ -41,6 +41,11 @@ public struct MountManager: Sendable {
     public func preflight(driveID: String, mountPath: String, engine: MountEngine) async throws(DriveError) -> PreflightResult {
         if let entry = MountTable.entry(at: mountPath) {
             if await supervisor.isRunning(driveID), await rc(driveID).isResponsive() { return .alreadyMountedByUs }
+            // Our own NFS volume whose rclone server is gone: it is dead (no data can flow), so remove it.
+            if entry.fsType == "nfs", entry.source.hasPrefix("localhost:"), !(await supervisor.isRunning(driveID)) {
+                await removeStaleNFSMount(mountPath)
+                if !MountTable.isMounted(mountPath) { return try await preflight(driveID: driveID, mountPath: mountPath, engine: engine) }
+            }
             throw .mountPointOccupied(path: mountPath, by: "\(entry.source) (\(entry.fsType))")
         }
         if await supervisor.isRunning(driveID) { throw .alreadyRunning }
@@ -80,13 +85,21 @@ public struct MountManager: Sendable {
         }
         try? FileManager.default.removeItem(at: paths.rcSocket(for: id))
 
+        var nfsPort: Int?
+        if request.engine == .nfs {
+            guard let port = MountCommandBuilder.freeLocalPort() else { throw .mountFailed("No free local port for the NFS server.") }
+            nfsPort = port
+        }
         let args = try MountCommandBuilder.arguments(drive: request.drive, engine: request.engine, mountPath: request.mountPath,
                                                      cacheDirectory: cacheDir.path, rcSocket: paths.rcSocket(for: id).path,
-                                                     configPath: paths.rcloneConfigURL.path, globals: request.globals)
+                                                     configPath: paths.rcloneConfigURL.path, globals: request.globals, nfsPort: nfsPort)
         let pid = try await supervisor.launch(driveID: id, executable: rcloneURL, arguments: args, environment: request.environment)
 
         let deadline = ContinuousClock.now + readyTimeout
         let client = rc(id)
+        if let nfsPort {
+            try await mountNFS(driveID: id, port: nfsPort, mountPath: request.mountPath, driveName: request.drive.name, deadline: deadline)
+        }
         while ContinuousClock.now < deadline {
             if !(await supervisor.isRunning(id)) {
                 let lines = await supervisor.recentOutput(for: id)
@@ -104,6 +117,45 @@ public struct MountManager: Sendable {
         let cause = ErrorClassifier.classify(output: lines, host: request.drive.name)
         if case .unknown = cause { throw .timeout("The volume did not appear within \(readyTimeout). The remote may be slow or unreachable.") }
         throw cause
+    }
+
+    /// Waits for rclone's NFS server to answer, then mounts it with tuned options. Stops the server on failure.
+    private func mountNFS(driveID id: String, port: Int, mountPath: String, driveName: String, deadline: ContinuousClock.Instant) async throws(DriveError) {
+        let client = rc(id)
+        while ContinuousClock.now < deadline {
+            if !(await supervisor.isRunning(id)) {
+                throw ErrorClassifier.classify(output: await supervisor.recentOutput(for: id), exitCode: 1, host: driveName)
+            }
+            if await client.isResponsive(), Self.portOpen(port) { break }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        let r = try? await runner.run(URL(fileURLWithPath: "/sbin/mount_nfs"),
+                                      arguments: MountCommandBuilder.nfsMountArguments(port: port, mountPath: mountPath),
+                                      timeout: .seconds(30))
+        guard let r, r.exitCode == 0, MountTable.isMounted(mountPath) else {
+            await supervisor.terminate(id)
+            _ = await supervisor.waitForExit(id, timeout: .seconds(10))
+            let detail = r.map { ($0.stderr + $0.stdout).trimmingCharacters(in: .whitespacesAndNewlines) } ?? "mount_nfs did not run"
+            throw .mountFailed("macOS could not mount the volume: \(Redactor.redact(detail))")
+        }
+    }
+
+    /// Unmounts an NFS volume left behind after its rclone server stopped. Only ever called for our own
+    /// `localhost:` mounts whose server is not running, so nothing pending can be lost.
+    public func removeStaleNFSMount(_ mountPath: String) async {
+        guard let e = MountTable.entry(at: mountPath), e.fsType == "nfs", e.source.hasPrefix("localhost:") else { return }
+        _ = try? await runner.run(URL(fileURLWithPath: "/sbin/umount"), arguments: ["-f", mountPath], timeout: .seconds(20))
+        logger.notice("Removed stale NFS mount at \(mountPath)")
+    }
+
+    static func portOpen(_ port: Int) -> Bool {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(UInt16(port).bigEndian)
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        return withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } } == 0
     }
 
     public func pendingUploads(_ driveID: String) async -> Int? {
