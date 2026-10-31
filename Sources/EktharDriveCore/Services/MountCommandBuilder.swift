@@ -73,6 +73,11 @@ public enum MountCommandBuilder {
             "--attr-timeout", "5s",
         ]
         if drive.provider.supportsChangePolling { args += ["--poll-interval", "1m"] }
+        if engine == .nfs {
+            // Keep NFS file handles on disk so Finder windows stay valid across rclone restarts
+            // instead of showing "stale" errors.
+            args += ["--nfs-cache-type", "disk", "--nfs-cache-dir", cacheDirectory + "/nfs-handles"]
+        }
         if engine == .macFUSE {
             args += ["--noappledouble"]
             if globals.macFUSEUsesFSKit { args += ["-o", "backend=fskit"] }

@@ -306,6 +306,7 @@ public final class DriveManager {
             log(id, "mount", "\(d.name) mounted at \(mountPath) (\(engine.displayName)).", .info)
             lastUsageRefresh[id] = nil
             Task { await self.refreshUsage(id) }
+            Task.detached(priority: .utility) { [paths] in await Self.prewarm(socket: paths.rcSocket(for: id).path, mountPath: mountPath) }
         } catch let error as DriveError {
             mountFailed(d, error)
         } catch {
@@ -483,6 +484,15 @@ public final class DriveManager {
         for id in await supervisor.checkAdopted() where desiredMounted.contains(id) {
             if let d = drive(id) { finishStopped(id); scheduleRetryOrFail(d, .processExited(code: -1, detail: "The reattached rclone process stopped.")) }
         }
+        // A volume ejected in Finder (or dropped by macOS) leaves an NFS-serving rclone behind. Notice it,
+        // let pending uploads finish, then stop the process.
+        for d in drives where state(d.id).phase == .mounted && !stopping.contains(d.id) {
+            if let p = state(d.id).mountPath, !MountTable.isMounted(p) {
+                log(d.id, "mount", "\(d.name) was ejected outside Ekthar Drive. Finishing any uploads, then stopping it.", .info)
+                desiredMounted.remove(d.id)
+                Task { await self.unmount(d.id, waitForUploads: true) }
+            }
+        }
         var busy = false
         for d in drives where state(d.id).phase.isActive {
             let rc = RcClient(socketPath: paths.rcSocket(for: d.id).path, timeoutSeconds: 5)
@@ -522,6 +532,25 @@ public final class DriveManager {
             }
         }
         return busy
+    }
+
+    /// Loads the top folder and each first-level folder into rclone's listing cache right after mounting,
+    /// so the first clicks in Finder do not wait for the cloud. Metadata only; no file contents. Max 60 folders.
+    nonisolated static func prewarm(socket: String, mountPath: String) async {
+        let rc = RcClient(socketPath: socket, timeoutSeconds: 60)
+        _ = try? await rc.call("vfs/refresh", params: ["recursive": "false"])
+        let top = (try? FileManager.default.contentsOfDirectory(atPath: mountPath)) ?? []
+        var dirs: [String] = []
+        for name in top where !name.hasPrefix(".") {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: mountPath + "/" + name, isDirectory: &isDir), isDir.boolValue { dirs.append(name) }
+            if dirs.count >= 60 { break }
+        }
+        for chunk in stride(from: 0, to: dirs.count, by: 10) {
+            var params: [String: String] = ["recursive": "false"]
+            for (i, name) in dirs[chunk..<min(chunk + 10, dirs.count)].enumerated() { params[i == 0 ? "dir" : "dir\(i + 1)"] = name }
+            _ = try? await rc.call("vfs/refresh", params: params)
+        }
     }
 
     /// Reads capacity. Uses the live process when mounted, otherwise a one-off rclone call.

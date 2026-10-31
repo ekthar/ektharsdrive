@@ -145,6 +145,11 @@ public struct MountManager: Sendable {
                 }
             }
         }
+        // The volume is gone and uploads are done. rclone's NFS server does not exit by itself when its
+        // mount disappears, so ask it to stop now (SIGTERM; FUSE rclone is already exiting).
+        if !MountTable.isMounted(mountPath), await supervisor.isRunning(driveID) {
+            await supervisor.terminate(driveID)
+        }
         if !(await supervisor.waitForExit(driveID, timeout: .seconds(15))) {
             await supervisor.terminate(driveID)
             _ = await supervisor.waitForExit(driveID, timeout: .seconds(20))

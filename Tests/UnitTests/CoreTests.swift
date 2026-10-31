@@ -98,6 +98,9 @@ import Testing
         #expect(!kext.contains("backend=fskit"))
         let nfs = try args(.oracleDefault, .nfs, globals: MountGlobals(macFUSEUsesFSKit: true))
         #expect(!nfs.contains("-o"))
+        #expect(value(nfs, "--nfs-cache-type") == "disk")
+        #expect(value(nfs, "--nfs-cache-dir") == "/c/nfs-handles")
+        #expect(!fs.contains("--nfs-cache-type"), "NFS-only flag")
     }
 
     @Test func classifiesMacFUSEExtensionErrors() {

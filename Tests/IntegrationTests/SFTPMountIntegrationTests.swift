@@ -403,6 +403,31 @@ struct SFTPMountIntegrationTests {
         }
     }
 
+    @Test func ejectOutsideAppStopsProcessAfterUploads() async throws {
+        try await withHarness(writeBack: 3, name: "ej") { h in
+            try await h.connect()
+            await h.manager.mount("oracle")
+            #expect(h.manager.state("oracle").phase == .mounted)
+            let pid = try #require(h.manager.state("oracle").pid)
+            try Data("eject me".utf8).write(to: URL(fileURLWithPath: h.mountPath).appendingPathComponent("late.txt"))
+            // Simulate Finder's Eject.
+            let r = try await ProcessRunner().run(URL(fileURLWithPath: "/sbin/umount"), arguments: [h.mountPath], timeout: .seconds(20))
+            #expect(r.exitCode == 0)
+            _ = await h.manager.pollOnce()
+            #expect(await eventually(.seconds(40)) { h.manager.state("oracle").phase == .unmounted }, "app notices the eject")
+            #expect(await eventually(.seconds(10)) { !ProcessSupervisor.isAlive(pid) }, "no orphan rclone left serving")
+            // rclone may stop as soon as the volume is ejected. A not-yet-uploaded file must then be kept in the
+            // cache and uploaded on the next mount. Either way it must reach the server: no data loss.
+            let target = h.server.data.appendingPathComponent("files/late.txt")
+            if !FileManager.default.fileExists(atPath: target.path) {
+                #expect(h.manager.cacheManager.diskStats("oracle").uploadsQueued >= 1, "kept in cache as a pending upload")
+                await h.manager.mount("oracle")
+                #expect(await eventually(.seconds(60)) { FileManager.default.fileExists(atPath: target.path) }, "uploaded on next mount")
+            }
+            #expect(try String(contentsOf: target, encoding: .utf8) == "eject me")
+        }
+    }
+
     @Test func relaunchAdoptsRunningMount() async throws {
         try await withHarness(name: "ad") { h in
             try await h.connect()
