@@ -82,6 +82,22 @@ import Testing
         #expect(value(a, "--volname") == "Google Drive")
     }
 
+    @Test func fskitBackendOnlyForMacFUSE() throws {
+        let fs = try args(.googleDefault, .macFUSE, globals: MountGlobals(macFUSEUsesFSKit: true))
+        #expect(value(fs, "-o") == "backend=fskit")
+        let kext = try args(.googleDefault, .macFUSE, globals: MountGlobals(macFUSEUsesFSKit: false))
+        #expect(!kext.contains("backend=fskit"))
+        let nfs = try args(.oracleDefault, .nfs, globals: MountGlobals(macFUSEUsesFSKit: true))
+        #expect(!nfs.contains("-o"))
+    }
+
+    @Test func classifiesMacFUSEExtensionErrors() {
+        if case .dependencyMissing(.macFUSE, let d) = ErrorClassifier.classify(output: ["MFMount: MFMount(_:_:_:_:): File system extension not enabled"]) {
+            #expect(d.contains("File System Extensions"))
+        } else { Issue.record("expected macFUSE extension error") }
+        if case .dependencyMissing(.macFUSE, _) = ErrorClassifier.classify(output: ["fuse: failed to exec mount program: Operation not permitted"]) {} else { Issue.record("expected macFUSE helper error") }
+    }
+
     @Test func oracleNFSArguments() throws {
         let a = try args(.oracleDefault, .nfs)
         #expect(Array(a.prefix(2)) == ["nfsmount", "oracle:/srv/ekthar-drive/files"])

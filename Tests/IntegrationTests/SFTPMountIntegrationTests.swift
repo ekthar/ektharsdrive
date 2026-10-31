@@ -9,6 +9,8 @@ import Testing
 
 let rclonePath = ProcessInfo.processInfo.environment["EKTHAR_RCLONE"]
 let integrationEnabled = rclonePath.map { FileManager.default.isExecutableFile(atPath: $0) } ?? false
+/// EKTHAR_ENGINE=macfuse runs the same suite through macFUSE instead of the built-in NFS engine.
+let testEngine: MountEngine = ProcessInfo.processInfo.environment["EKTHAR_ENGINE"].flatMap(MountEngine.init(rawValue:)) ?? .nfs
 
 func sha256(_ url: URL) throws -> String {
     let handle = try FileHandle(forReadingFrom: url)
@@ -118,7 +120,7 @@ struct Harness {
         let db = try AppDatabase(url: paths.databaseURL)
         var settings = AppSettings()
         settings.rclonePath = rclonePath
-        settings.mountEngine = .nfs
+        settings.mountEngine = testEngine
         settings.minFreeSpaceGB = 1
         settings.notificationsEnabled = false
         try db.setSetting("app", String(decoding: try JSONEncoder().encode(settings), as: UTF8.self))
@@ -369,14 +371,14 @@ struct SFTPMountIntegrationTests {
             var b = a
             b.id = "vol-b"; b.name = "Vol B"; b.remotePath = "/second"; b.mountPath = h.root.appendingPathComponent("mnt/B").path
             for d in [a, b] {
-                try await mm.mount(MountRequest(drive: d, engine: .nfs, mountPath: d.mountPath!, environment: try rclone.environment(), globals: MountGlobals()))
+                try await mm.mount(MountRequest(drive: d, engine: testEngine, mountPath: d.mountPath!, environment: try rclone.environment(), globals: MountGlobals()))
             }
             #expect(MountTable.isMounted(a.mountPath!) && MountTable.isMounted(b.mountPath!))
             #expect(await h.manager.supervisor.info(for: "vol-a")?.pid != h.manager.supervisor.info(for: "vol-b")?.pid, "separate processes")
 
             // Duplicate mount is refused.
             await #expect(throws: DriveError.self) {
-                try await mm.mount(MountRequest(drive: a, engine: .nfs, mountPath: h.root.appendingPathComponent("mnt/A2").path, environment: try rclone.environment(), globals: MountGlobals()))
+                try await mm.mount(MountRequest(drive: a, engine: testEngine, mountPath: h.root.appendingPathComponent("mnt/A2").path, environment: try rclone.environment(), globals: MountGlobals()))
             }
 
             try Data("b".utf8).write(to: URL(fileURLWithPath: b.mountPath!).appendingPathComponent("b.txt"))

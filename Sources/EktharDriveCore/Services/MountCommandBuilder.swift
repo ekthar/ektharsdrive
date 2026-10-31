@@ -3,10 +3,19 @@ import Foundation
 public struct MountGlobals: Sendable, Equatable {
     public var logLevel: String
     public var minFreeSpaceBytes: Int64
+    /// macFUSE 5 can run on Apple's FSKit instead of a kernel extension. On macOS 26+ the kernel backend
+    /// needs Reduced Security on Apple Silicon, so FSKit is the default there.
+    public var macFUSEUsesFSKit: Bool
 
-    public init(logLevel: String = "INFO", minFreeSpaceBytes: Int64 = 5 * .gibibyte) {
+    public init(logLevel: String = "INFO", minFreeSpaceBytes: Int64 = 5 * .gibibyte,
+                macFUSEUsesFSKit: Bool = MountGlobals.fskitPreferred) {
         self.logLevel = logLevel
         self.minFreeSpaceBytes = minFreeSpaceBytes
+        self.macFUSEUsesFSKit = macFUSEUsesFSKit
+    }
+
+    public static var fskitPreferred: Bool {
+        ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0))
     }
 
     public static let allowedLogLevels = ["DEBUG", "INFO", "NOTICE", "ERROR"]
@@ -58,7 +67,10 @@ public enum MountCommandBuilder {
             "--stats", "0",
         ]
         if drive.provider.supportsChangePolling { args += ["--poll-interval", "1m"] }
-        if engine == .macFUSE { args += ["--noappledouble"] }
+        if engine == .macFUSE {
+            args += ["--noappledouble"]
+            if globals.macFUSEUsesFSKit { args += ["-o", "backend=fskit"] }
+        }
         return args
     }
 }

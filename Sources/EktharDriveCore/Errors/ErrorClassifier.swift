@@ -24,6 +24,12 @@ public enum ErrorClassifier {
         if lower.contains("no space left on device") {
             return .localDiskFull(freeBytes: 0)
         }
+        if lower.contains("file system extension not enabled") {
+            return .dependencyMissing(.macFUSE, detail: "macFUSE is installed but its file system extension is turned off. Turn on macFUSE in System Settings > General > Login Items & Extensions > File System Extensions, or switch to the Built-in NFS engine.")
+        }
+        if lower.contains("failed to exec mount program") {
+            return .dependencyMissing(.macFUSE, detail: "macOS did not allow the macFUSE mount helper to run. Approve macFUSE in System Settings > Privacy & Security, or switch to the Built-in NFS engine.")
+        }
         if lower.contains("cannot find fuse") || lower.contains("libfuse") || lower.contains("fuse: device not found")
             || lower.contains("mount helper error") || lower.contains("osxfuse") || lower.contains("macfuse") {
             return .dependencyMissing(.macFUSE, detail: "macFUSE is required for this mount engine. Install it from macfuse.github.io, or switch to the Built-in NFS engine in Settings > Advanced.")
