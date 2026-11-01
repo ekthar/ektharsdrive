@@ -58,10 +58,11 @@ public enum TimeMachineDisk {
         }
     }
 
-    /// Attaches the image (no Finder window; owners on, as Time Machine requires).
+    /// Attaches the image as a normal visible disk (owners on, as Time Machine requires). A hidden
+    /// ("nobrowse") disk is skipped by Time Machine.
     public static func attach(mountPath: String) async throws(DriveError) {
         guard attachedVolume == nil else { return }
-        try await run(["attach", "-nobrowse", "-owners", "on", bundleURL(mountPath: mountPath).path], timeout: .seconds(180), what: "Opening the backup disk")
+        try await run(["attach", "-owners", "on", bundleURL(mountPath: mountPath).path], timeout: .seconds(180), what: "Opening the backup disk")
     }
 
     /// Detaches without force: macOS refuses while Time Machine is writing, and then the drive stays mounted.

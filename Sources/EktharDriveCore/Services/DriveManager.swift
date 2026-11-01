@@ -268,6 +268,7 @@ public final class DriveManager {
                 $0.mountPath = path
             }
             log(d.id, "mount", "Reattached to \(d.name), which kept running while Ekthar Drive was closed.", .info)
+            if TimeMachineDisk.exists(mountPath: path) { await openTimeMachineDisk(d.id) }
         }
     }
 
@@ -337,13 +338,22 @@ public final class DriveManager {
             let pid: Int32
             do {
                 pid = try await manager.mount(MountRequest(drive: d, engine: engine, mountPath: mountPath, environment: env, globals: settings.globals))
-            } catch DriveError.dependencyMissing(.macFUSE, let detail) where engine == .macFUSE && settings.mountEngine == .automatic && deps.nfsUsable {
-                // macFUSE is installed but cannot mount (e.g. its extension is switched off). Use the built-in engine.
-                macFUSEUnusable = true
-                log(id, "mount", "macFUSE could not mount (\(detail)) Using the built-in NFS engine instead.", .warning)
-                engine = .nfs
-                mountPath = MountPathResolver.path(for: d, engine: engine)
-                pid = try await manager.mount(MountRequest(drive: d, engine: engine, mountPath: mountPath, environment: env, globals: settings.globals))
+            } catch DriveError.dependencyMissing(.macFUSE, let detail) where engine == .macFUSE {
+                // macFUSE has two backends. The kernel one loads on its first mount (so it is often not
+                // loaded yet after a restart); FSKit is a separate switch. Try the other one before giving up.
+                var other = settings.globals
+                other.macFUSEUsesFSKit.toggle()
+                do {
+                    pid = try await manager.mount(MountRequest(drive: d, engine: engine, mountPath: mountPath, environment: env, globals: other))
+                    log(id, "mount", "macFUSE mounted with its \(other.macFUSEUsesFSKit ? "FSKit" : "kernel") backend.", .info)
+                } catch DriveError.dependencyMissing(.macFUSE, _) where settings.mountEngine == .automatic && deps.nfsUsable {
+                    // Neither backend works (e.g. the extension is switched off). Use the built-in engine.
+                    macFUSEUnusable = true
+                    log(id, "mount", "macFUSE could not mount (\(detail)) Using the built-in NFS engine instead.", .warning)
+                    engine = .nfs
+                    mountPath = MountPathResolver.path(for: d, engine: engine)
+                    pid = try await manager.mount(MountRequest(drive: d, engine: engine, mountPath: mountPath, environment: env, globals: settings.globals))
+                }
             }
             guard desiredMounted.contains(id) else {
                 // User asked to unmount while we were mounting.
