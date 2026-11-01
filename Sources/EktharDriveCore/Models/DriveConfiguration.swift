@@ -36,12 +36,15 @@ public enum MountEngine: String, Codable, Sendable, CaseIterable {
     case macFUSE = "macfuse"
     /// `rclone nfsmount`: rclone serves NFS on 127.0.0.1 and macOS mounts it. No kernel extension required.
     case nfs
+    /// `rclone mount` through FUSE-T: a FUSE library with no kernel extension and no System Settings switch.
+    case fuseT = "fuset"
 
     public var displayName: String {
         switch self {
         case .automatic: "Automatic"
         case .macFUSE: "macFUSE"
         case .nfs: "Built-in NFS"
+        case .fuseT: "FUSE-T"
         }
     }
 }

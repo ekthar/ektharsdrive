@@ -318,11 +318,11 @@ struct SFTPMountIntegrationTests {
             for _ in 0..<(DriveManager.watchdogRestartAfter + 1) where h.manager.watchdogRestarts == before {
                 _ = await h.manager.pollOnce()
             }
-            #expect(h.manager.watchdogRestarts == before + 1, "watchdog decided to restart")
+            #expect(h.manager.watchdogRestarts == before + 1, "watchdog decided to restart: \(h.manager.recentActivity.prefix(8).map(\.message))")
             kill(pid, SIGCONT)
             #expect(await eventually(.seconds(90), poll: .seconds(1)) {
                 h.manager.state("oracle").phase == .mounted && h.manager.state("oracle").pid != pid
-            }, "remounted with a new process: \(h.manager.state("oracle"))")
+            }, "remounted with a new process: \(h.manager.state("oracle").phase) \(h.manager.recentActivity.prefix(8).map(\.message))")
             #expect(MountTable.isMounted(h.mountPath))
             let reports = (try? FileManager.default.contentsOfDirectory(atPath: h.paths.logsDirectory.path))?.filter { $0.hasPrefix("crash-") } ?? []
             #expect(!reports.isEmpty, "crash report written")

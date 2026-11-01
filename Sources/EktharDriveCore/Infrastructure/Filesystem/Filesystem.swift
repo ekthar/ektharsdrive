@@ -33,8 +33,16 @@ public enum MountTable {
 
     public static func isMounted(_ path: String) -> Bool { entry(at: path) != nil }
 
+    /// Text-only cleanup. NSString.standardizingPath looks at the disk, and on a hung volume that look
+    /// fails, which made a frozen mount read as "not mounted" (and the drive was stopped as if ejected).
     static func normalize(_ path: String) -> String {
-        var p = (path as NSString).standardizingPath
+        var parts: [Substring] = []
+        for c in path.split(separator: "/", omittingEmptySubsequences: true) {
+            if c == "." { continue }
+            if c == ".." { _ = parts.popLast(); continue }
+            parts.append(c)
+        }
+        var p = "/" + parts.joined(separator: "/")
         if p.hasPrefix("/private/var/") { p = String(p.dropFirst("/private".count)) }
         return p
     }

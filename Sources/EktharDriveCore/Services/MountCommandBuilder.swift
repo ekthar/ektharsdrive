@@ -56,7 +56,8 @@ public enum MountCommandBuilder {
         let c = drive.cache
         var args: [String]
         switch engine {
-        case .macFUSE:
+        case .macFUSE, .fuseT:
+            // Same rclone command for both; FUSE-T is picked by CGOFUSE_LIBFUSE_PATH in the environment.
             args = ["mount", drive.remoteSpec, mountPath, "--volname", drive.name, "--attr-timeout", "5s"]
         case .nfs:
             guard let nfsPort, (1024...65535).contains(nfsPort) else { throw .invalidConfiguration("No local port for the NFS server.") }

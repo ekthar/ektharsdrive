@@ -5,6 +5,7 @@ public enum Dependency: String, Sendable, Codable {
     case rcloneMountSupport
     case macFUSE
     case nfsClient
+    case fuseT
 }
 
 /// Every failure the app can surface. Each case maps to a distinct UI state and recovery action.
@@ -60,6 +61,7 @@ public enum DriveError: Error, Sendable, Equatable, Codable {
             case .rcloneMountSupport: "This rclone build cannot mount"
             case .macFUSE: "macFUSE is not installed"
             case .nfsClient: "The macOS NFS client is unavailable"
+            case .fuseT: "FUSE-T could not mount"
             }
         case .invalidConfiguration: "Invalid configuration"
         case .notConfigured: "Not configured"

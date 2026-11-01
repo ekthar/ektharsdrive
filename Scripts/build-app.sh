@@ -2,14 +2,14 @@
 # Builds "Ekthar Drive.app" from the Swift package.
 #   CONFIG=release|debug   (default release)
 #   ARCHS="arm64"          (use "arm64 x86_64" for a universal binary)
-#   VERSION=1.1.1
+#   VERSION=1.1.2
 #   SIGN_IDENTITY="-"      (ad-hoc). Use "Developer ID Application: Name (TEAMID)" for distribution.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="${CONFIG:-release}"
 ARCHS="${ARCHS:-arm64}"
-VERSION="${VERSION:-1.1.1}"
+VERSION="${VERSION:-1.1.2}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)}"
 if [ -z "${SIGN_IDENTITY:-}" ] && security find-certificate -c "Ekthar Drive Local" >/dev/null 2>&1; then
   SIGN_IDENTITY="Ekthar Drive Local"   # stable local identity: Keychain "Always Allow" survives rebuilds

@@ -204,6 +204,10 @@ struct AdvancedSettingsView: View {
                     if let v = deps?.macFUSEVersion { Text("\(v)\(deps?.libfuseInstalled == true ? "" : " (libfuse missing)")") }
                     else { Link("Not installed. Get macFUSE…", destination: URL(string: "https://macfuse.github.io")!) }
                 }
+                LabeledContent("FUSE-T") {
+                    if deps?.fuseTInstalled == true { Text("Installed") }
+                    else { Link("Not installed. Get FUSE-T…", destination: DependencyChecker.fuseTDownload) }
+                }
                 LabeledContent("macOS NFS client", value: deps?.nfsClientAvailable == true ? "Available" : "Unavailable")
                 Button("Check Again") { Task { await drives.refreshDependencies() } }
             }
@@ -254,9 +258,10 @@ struct AdvancedSettingsView: View {
 
     private var engineHelp: String {
         switch drives.settings.mountEngine {
-        case .automatic: "Uses macFUSE when installed (volumes appear in /Volumes), otherwise the built-in NFS engine (volumes appear in ~/Volumes)."
-        case .macFUSE: "Requires macFUSE and the official rclone build. Volumes appear in /Volumes."
+        case .automatic: "Uses macFUSE when it works, otherwise the built-in NFS engine. Volumes appear in ~/Volumes."
+        case .macFUSE: "Requires macFUSE and the official rclone build. Volumes appear in ~/Volumes."
         case .nfs: "No kernel extension needed. rclone serves NFS on 127.0.0.1 only and macOS mounts it in ~/Volumes."
+        case .fuseT: "Requires FUSE-T. No kernel extension and no System Settings switch. Volumes appear in ~/Volumes. Opening a file can update its date."
         }
     }
 

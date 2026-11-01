@@ -255,12 +255,14 @@ public final class DriveManager {
             trackers[d.id] = TransferTracker(driveID: d.id, remoteName: d.remoteName, ignoreExistingHistory: true)
             // Use the mount that really exists. Guessing from settings picked the macFUSE path while the drive
             // was mounted with NFS, so the eject check saw "no mount" and stopped a healthy drive.
-            let candidates: [(MountEngine, String)] = [.nfs, .macFUSE].map { ($0, MountPathResolver.path(for: d, engine: $0)) }
-            guard let (engine, path) = candidates.first(where: { MountTable.isMounted($0.1) }) else {
+            // All engines now share ~/Volumes/<name>; older versions used /Volumes for macFUSE.
+            let paths = [MountPathResolver.path(for: d, engine: .nfs), "/Volumes/\(d.name)"]
+            guard let path = paths.first(where: { MountTable.isMounted($0) }), let entry = MountTable.entry(at: path) else {
                 log(d.id, "mount", "Found \(d.name)'s rclone running but its volume is gone; stopping it.", .warning)
                 await supervisor.terminate(d.id)
                 continue
             }
+            let engine = Self.engine(fsType: entry.fsType, source: entry.source)
             update(d.id) {
                 $0.phase = .mounted
                 $0.pid = info.pid
@@ -270,6 +272,14 @@ public final class DriveManager {
             log(d.id, "mount", "Reattached to \(d.name), which kept running while Ekthar Drive was closed.", .info)
             if TimeMachineDisk.exists(mountPath: path) { await openTimeMachineDisk(d.id) }
         }
+    }
+
+    /// Which engine made a mount, from the mount table. Our NFS engine mounts "localhost:/"; FUSE-T is
+    /// also NFS underneath but with its own source name; macFUSE reports a "macfuse" file system.
+    nonisolated static func engine(fsType: String, source: String) -> MountEngine {
+        if fsType.lowercased().contains("fuse") { return .macFUSE }
+        if fsType == "nfs", source.hasPrefix("localhost:") || source.hasPrefix("127.0.0.1:") { return .nfs }
+        return .fuseT
     }
 
     private func autoMount() async {
@@ -337,7 +347,11 @@ public final class DriveManager {
             var mountPath = MountPathResolver.path(for: d, engine: engine)
             let pid: Int32
             do {
-                pid = try await manager.mount(MountRequest(drive: d, engine: engine, mountPath: mountPath, environment: env, globals: settings.globals))
+                let engineEnv = env.merging(DependencyChecker.environment(for: engine)) { _, new in new }
+                pid = try await manager.mount(MountRequest(drive: d, engine: engine, mountPath: mountPath, environment: engineEnv, globals: settings.globals))
+            } catch DriveError.dependencyMissing(.macFUSE, let detail) where engine == .fuseT {
+                // rclone's FUSE errors mention macFUSE even when FUSE-T is the library in use.
+                throw DriveError.dependencyMissing(.fuseT, detail: "FUSE-T is installed but rclone could not mount with it (\(detail)) Reinstall FUSE-T, or choose the Built-in NFS engine in Settings > Advanced.")
             } catch DriveError.dependencyMissing(.macFUSE, let detail) where engine == .macFUSE {
                 // macFUSE has two backends. The kernel one loads on its first mount (so it is often not
                 // loaded yet after a restart); FSKit is a separate switch. Try the other one before giving up.
@@ -597,8 +611,15 @@ public final class DriveManager {
         }
         // A volume ejected in Finder (or dropped by macOS) leaves an NFS-serving rclone behind. Notice it,
         // let pending uploads finish, then stop the process.
-        for d in drives where state(d.id).phase == .mounted && !stopping.contains(d.id) {
+        // Not while the watchdog is restarting it: its volume is gone on purpose and it comes back by itself.
+        for d in drives where state(d.id).phase == .mounted && !stopping.contains(d.id) && !watchdogStopping.contains(d.id) {
             if let p = state(d.id).mountPath, !MountTable.isMounted(p) {
+                // macOS drops an NFS volume by itself about 20 s after its server stops answering. That is a
+                // hang, not the user ejecting: restart rclone instead of stopping the drive.
+                if !(await RcClient(socketPath: paths.rcSocket(for: d.id).path, timeoutSeconds: 5).isResponsive()) {
+                    watchdogRestart(d, reason: "it stopped answering and macOS removed its volume")
+                    continue
+                }
                 log(d.id, "mount", "\(d.name) was ejected outside Ekthar Drive. Finishing any uploads, then stopping it.", .info)
                 desiredMounted.remove(d.id)
                 Task { await self.unmount(d.id, waitForUploads: true) }
